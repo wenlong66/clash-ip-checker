@@ -140,10 +140,16 @@
 
                 <div class="results-actions">
 
-                    <button class="small" @click="exportYaml" :disabled="selected.length === 0">
-                        📥 导出选中 (<span x-text="selected.length"></span>)
+                    <button class="small" @click="exportYaml" :disabled="isExporting || selected.length === 0">
+                        <span x-show="!isExporting">📥 导出选中 (<span x-text="selected.length"></span>)</span>
+                        <span x-show="isExporting" style="display: none;">正在导出…</span>
                     </button>
                 </div>
+            </div>
+
+            <div x-show="isExporting" role="status" style="display: none;">
+                <small>正在生成 YAML，请稍候…</small>
+                <progress aria-label="正在导出 YAML"></progress>
             </div>
 
             <table role="grid">
@@ -208,6 +214,9 @@
                 </header>
                 <!-- CodeMirror container for syntax highlighting -->
                 <div id="export-editor" style="margin-bottom: 1rem;"></div>
+                <label for="clash-import-name">导入名称</label>
+                <input id="clash-import-name" type="text" x-model="importName"
+                    placeholder="填写 Clash 中显示的配置名称">
                 <footer>
                     <div style="display: flex; gap: 0.5rem; width: 100%;">
                         <button @click="downloadYaml">💾 下载</button>

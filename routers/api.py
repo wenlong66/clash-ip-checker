@@ -394,17 +394,18 @@ async def recheck_node(node_id: int, request: RecheckRequest):
 @router.post("/export")
 async def export_yaml(request: ExportRequest):
     """Export selected nodes as YAML"""
-    selected_nodes = [n for n in state.nodes if n["id"] in request.node_ids]
+    node_ids = set(request.node_ids)
+    selected_nodes = [n for n in state.nodes if n["id"] in node_ids]
     
     if not selected_nodes:
         raise HTTPException(status_code=400, detail="请选择要导出的节点")
     
     # Build name mapping for proxy-groups sync
     name_map = {n["original_name"]: n["name"] for n in selected_nodes}
-    deleted_names = set(n["original_name"] for n in state.nodes if n["id"] not in request.node_ids)
+    deleted_names = set(n["original_name"] for n in state.nodes if n["id"] not in node_ids)
     
-    # Clone original YAML (Deep Copy to avoid mutating state)
-    export_data = copy.deepcopy(state.original_yaml)
+    # Copy only edited containers; deep-copying YAML rule metadata is expensive.
+    export_data = state.original_yaml.copy()
     
     # Replace proxies with updated config and name
     new_proxies = []
@@ -416,7 +417,11 @@ async def export_yaml(request: ExportRequest):
     export_data["proxies"] = new_proxies
     
     # Update proxy-groups
-    for group in export_data.get("proxy-groups", []):
+    if "proxy-groups" in export_data:
+        export_data["proxy-groups"] = copy.copy(export_data["proxy-groups"])
+    for i, original_group in enumerate(export_data.get("proxy-groups", [])):
+        group = original_group.copy()
+        export_data["proxy-groups"][i] = group
         new_group_proxies = []
         for proxy_name in group.get("proxies", []):
             if proxy_name in deleted_names:

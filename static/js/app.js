@@ -34,9 +34,11 @@ function app() {
         editValue: '',
 
         // Export state
+        isExporting: false,
         exportedYaml: '',
         exportFilename: '',
         exportUrl: '',
+        importName: '',
 
         // CodeMirror editor instance
         editor: null,
@@ -356,11 +358,13 @@ function app() {
 
         // Export
         async exportYaml() {
+            if (this.isExporting) return;
             if (this.selected.length === 0) {
                 alert('请先选择要导出的节点');
                 return;
             }
 
+            this.isExporting = true;
             try {
                 const res = await fetch('/api/export', {
                     method: 'POST',
@@ -369,19 +373,23 @@ function app() {
                 });
 
                 const data = await res.json();
+                if (!res.ok) {
+                    throw new Error(data.detail || '导出请求失败');
+                }
                 this.exportedYaml = data.yaml;
                 this.exportFilename = data.filename;
                 this.exportUrl = data.url;
+                this.importName = this.exportFilename.replace('.yaml', '');
                 this.$refs.exportModal.showModal();
 
                 // Initialize Export Editor
-                this.$nextTick(() => {
+                await this.$nextTick(() => {
                     const el = document.getElementById('export-editor');
                     if (!el) return;
 
                     // Clear and recreate to avoid stale content
                     el.innerHTML = '';
-                    this.exportEditor = CodeMirror(el, {
+                    const editor = CodeMirror(el, {
                         mode: 'yaml',
                         theme: 'material-darker',
                         lineNumbers: true,
@@ -389,11 +397,15 @@ function app() {
                         lineWrapping: true,
                         value: this.exportedYaml
                     });
-                    setTimeout(() => this.exportEditor.refresh(), 50);
+                    this.exportEditor = editor;
+                    // Refresh the raw instance so Alpine proxies do not alter CodeMirror internals.
+                    setTimeout(() => editor.refresh(), 50);
                 });
 
             } catch (e) {
                 alert(`导出失败: ${e.message}`);
+            } finally {
+                this.isExporting = false;
             }
         },
 
@@ -422,7 +434,7 @@ function app() {
                 return;
             }
             const fullUrl = encodeURIComponent(`${window.location.protocol}//${window.location.host}${this.exportUrl}`);
-            const name = encodeURIComponent(this.exportFilename.replace('.yaml', ''));
+            const name = encodeURIComponent(this.importName.trim() || this.exportFilename.replace('.yaml', ''));
             // Schema: clash://install-config?url=xxx&name=xxx
             window.location.href = `clash://install-config?url=${fullUrl}&name=${name}`;
         }
