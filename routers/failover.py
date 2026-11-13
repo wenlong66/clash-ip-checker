@@ -6,11 +6,13 @@ from pathlib import Path
 import re
 from urllib.parse import urlsplit
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from ruamel.yaml import YAML, YAMLError
 
 from schemas import FailoverRequest
+from utils.exports import save_export
 
 
 def require_local(request: Request):
@@ -74,7 +76,7 @@ def profile_nodes(root, profile):
     return nodes
 
 
-def exported_profile_filename(profile, http_request):
+def exported_profile_filename(profile, http_request, kind="failover"):
     """Only this web app's existing generated subscriptions can be updated."""
     try:
         url = urlsplit(profile.get("url") or "")
@@ -84,19 +86,39 @@ def exported_profile_filename(profile, http_request):
             return None
     except ValueError:
         return None
-    match = re.fullmatch(r"/exports/(clash_failover_[0-9a-f]{32}\.yaml)", url.path)
-    if match and (Path("exports") / match[1]).is_file():
-        return match[1]
+    patterns = {
+        "failover": r"/exports/(clash_failover_[0-9a-f]{32}\.yaml)",
+        "checked": r"/exports/(clash_checked_(?:[0-9a-f]{8}|[0-9a-f]{32})\.yaml)",
+        "qingyunti": r"/api/qingyunti/download/([0-9a-f]{32})",
+    }
+    match = re.fullmatch(patterns[kind], url.path)
+    if match:
+        filename = f"qingyunti_{match[1]}.yaml" if kind == "qingyunti" else match[1]
+        directory = "private_exports" if kind == "qingyunti" else "exports"
+        if (Path(directory) / filename).is_file():
+            return filename
     return None
 
 
+def export_target(target_profile_id, http_request, kind):
+    if not target_profile_id:
+        return None, None
+    require_local(http_request)
+    _, profiles = local_profiles()
+    target = next((item for item in profiles if item.get("uid") == target_profile_id), None)
+    filename = exported_profile_filename(target, http_request, kind) if target else None
+    if not filename:
+        raise HTTPException(status_code=400, detail="只能更新当前页生成且导出文件仍存在的配置，请刷新订阅列表")
+    return filename, target.get("name") or target["uid"]
+
+
 @router.get("/profiles")
-def list_profiles(http_request: Request):
+def list_profiles(http_request: Request, kind: Literal["failover", "checked", "qingyunti"] = "failover"):
     root, profiles = local_profiles()
     result = []
     for profile in profiles:
         item = {"id": profile["uid"], "name": profile.get("name") or profile["uid"], "nodes": []}
-        filename = exported_profile_filename(profile, http_request)
+        filename = exported_profile_filename(profile, http_request, kind)
         if filename:
             item["export_filename"] = filename
         try:
@@ -192,16 +214,6 @@ def export_failover(request: FailoverRequest, http_request: Request):
     YAML().dump(config, stream)
     content = stream.getvalue()
     filename = filename or f"clash_failover_{uuid.uuid4().hex}.yaml"
-    directory = Path("exports")
-    directory.mkdir(exist_ok=True)
-    path = directory / filename
-    temporary = directory / f"{uuid.uuid4().hex}.tmp"
-    try:
-        temporary.write_text(content, encoding="utf-8")
-        temporary.replace(path)
-    except OSError:
-        raise HTTPException(status_code=500, detail="保存配置失败，原订阅源保持不变，请检查目录写入权限") from None
-    finally:
-        temporary.unlink(missing_ok=True)
+    save_export("exports", filename, content)
     return {"yaml": content, "filename": filename, "url": f"/exports/{filename}", "failover": True,
             "updated_profile": (target.get("name") or target["uid"]) if target else None}

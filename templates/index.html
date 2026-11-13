@@ -49,6 +49,22 @@
         </div>
     </div>
     {% endmacro %}
+    {% macro export_target(kind) %}
+    <label for="export-target">保存方式</label>
+    <select id="export-target" x-model="exportTargets.target_profile_id"
+        :disabled="exportTargets.loading || isExporting || qingyunti.loading">
+        <option value="">新建配置（生成独立订阅地址）</option>
+        <template x-for="profile in exportTargets.profiles" :key="profile.id">
+            <option :value="profile.id" x-text="`更新已有：${profile.name}`"></option>
+        </template>
+    </select>
+    <button type="button" class="secondary small" @click="loadExportTargets('{{ kind }}')"
+        :disabled="exportTargets.loading || isExporting || qingyunti.loading" :aria-busy="exportTargets.loading">刷新已有配置</button>
+    <p class="failover-note" x-show="exportTargets.target_profile_id" x-cloak>复用原订阅地址。保存后到 Clash 更新原订阅，无需再次导入。</p>
+    <p class="failover-note" x-show="exportTargets.error" role="status" x-cloak>
+        <span x-text="exportTargets.error"></span>；仍可新建配置。
+    </p>
+    {% endmacro %}
     <main class="container" x-data="app()" x-init="init()">
         <!-- Header -->
         <header style="padding-bottom: 0; margin-bottom: 1rem;">
@@ -67,15 +83,16 @@
         </nav>
 
         {% if page == 'qingyunti' %}
-        <section class="results-section failover-builder" aria-labelledby="qingyunti-heading">
+        <section class="results-section failover-builder" aria-labelledby="qingyunti-heading" x-init="loadExportTargets('qingyunti')">
             <div class="results-header">
                 <h2 id="qingyunti-heading">梯子导出</h2>
-                <button @click="exportQingyunti" :disabled="qingyunti.loading || isExporting"
+                <button @click="exportQingyunti" :disabled="qingyunti.loading || isExporting || exportTargets.loading"
                     :aria-busy="qingyunti.loading" x-text="qingyunti.loading ? '正在提取…' : '提取并预览'"></button>
             </div>
+            {{ export_target('qingyunti') }}
             <p>先在本机打开梯子客户端，登录并加载节点，再点击「提取并预览」。成功后可下载 YAML，或填写名称后直接导入 Clash。</p>
             <p>网页服务和梯子客户端需运行在同一台 Windows 电脑上，请通过 localhost 或 127.0.0.1 打开网页。提取不会切换当前节点。</p>
-            <p>导出为静态配置，节点变更后需重新提取。配置包含节点凭据，请勿分享；重启网页服务或再次提取后，旧导入链接会失效。</p>
+            <p>导出为静态配置，节点变更后需重新提取并保存，再到 Clash 更新订阅。配置保存在本机并包含节点凭据，请勿分享；再次提取或重启网页服务不会使已保存的地址失效，下载和更新时需保持网页服务运行。</p>
             <p x-show="qingyunti.loading" role="status" x-cloak>正在读取已加载的配置，最多等待 90 秒…</p>
             <p x-show="qingyunti.nodeCount" role="status" x-cloak>已提取 <span x-text="qingyunti.nodeCount"></span> 个节点。导入后请在 Clash 中启用新配置，保持网页服务运行直到导入完成。</p>
             <p x-show="qingyunti.error" x-text="qingyunti.error" class="error-text" role="alert" x-cloak></p>
@@ -263,7 +280,7 @@
 
 
         <!-- Results Table -->
-        <section x-show="nodes.length > 0" class="results-section">
+        <section x-show="nodes.length > 0" class="results-section" x-init="loadExportTargets('checked')">
             <div class="results-header">
                 <h3>节点列表 (<span x-text="nodes.length"></span>)</h3>
 
@@ -281,12 +298,14 @@
 
                 <div class="results-actions">
 
-                    <button class="small" @click="exportYaml" :disabled="isExporting || selected.length === 0">
+                    <button class="small" @click="exportYaml" :disabled="isExporting || exportTargets.loading || selected.length === 0">
                         <span x-show="!isExporting">📥 导出选中 (<span x-text="selected.length"></span>)</span>
                         <span x-show="isExporting" style="display: none;">正在导出…</span>
                     </button>
                 </div>
             </div>
+
+            {{ export_target('checked') }}
 
             <div x-show="isExporting" role="status" style="display: none;">
                 <small>正在生成 YAML，请稍候…</small>

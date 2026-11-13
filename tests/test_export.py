@@ -1,5 +1,6 @@
 import asyncio
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedSeq
+from starlette.requests import Request
 
 from routers import api
 from schemas import ExportRequest
@@ -56,16 +58,19 @@ rules: # leave unchanged
 
     def export(self, node_ids):
         with tempfile.TemporaryDirectory() as directory:
-            real_open = open
-            with patch.object(api.state, 'original_yaml', self.original), \
-                 patch.object(api.state, 'nodes', self.nodes), \
-                 patch('routers.api.open', side_effect=lambda path, *args, **kwargs:
-                       real_open(Path(directory) / Path(path).name, *args, **kwargs)):
-                result = asyncio.run(api.export_yaml(ExportRequest(node_ids=node_ids)))
-                self.assertEqual(
-                    (Path(directory) / result['filename']).read_text(encoding='utf-8'),
-                    result['yaml'],
-                )
+            previous = Path.cwd()
+            try:
+                os.chdir(directory)
+                with patch.object(api.state, 'original_yaml', self.original), \
+                     patch.object(api.state, 'nodes', self.nodes):
+                    result = asyncio.run(api.export_yaml(ExportRequest(node_ids=node_ids),
+                                                        Request({'type': 'http'})))
+                    self.assertEqual(
+                        (Path('exports') / result['filename']).read_text(encoding='utf-8'),
+                        result['yaml'],
+                    )
+            finally:
+                os.chdir(previous)
         self.assertEqual(self.dump(self.original), self.original_text)
         return result['yaml']
 

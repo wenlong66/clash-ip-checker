@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from ruamel.yaml import YAML, YAMLError
 import asyncio
@@ -6,13 +6,14 @@ import uuid
 import json
 import copy
 import io
-import os
 from typing import Dict, List, Any
 
 # Local imports
 from state import state
 from schemas import StartRequest, UpdateNodeRequest, ExportRequest, RecheckRequest
 from core.clash_api import ClashController
+from routers.failover import export_target
+from utils.exports import save_export
 
 router = APIRouter(prefix="/api")
 yaml = YAML()
@@ -392,13 +393,14 @@ async def recheck_node(node_id: int, request: RecheckRequest):
 
 
 @router.post("/export")
-async def export_yaml(request: ExportRequest):
+async def export_yaml(request: ExportRequest, http_request: Request):
     """Export selected nodes as YAML"""
     node_ids = set(request.node_ids)
     selected_nodes = [n for n in state.nodes if n["id"] in node_ids]
     
     if not selected_nodes:
         raise HTTPException(status_code=400, detail="请选择要导出的节点")
+    filename, updated_profile = export_target(request.target_profile_id, http_request, "checked")
     
     # Build name mapping for proxy-groups sync
     name_map = {n["original_name"]: n["name"] for n in selected_nodes}
@@ -438,14 +440,13 @@ async def export_yaml(request: ExportRequest):
     yaml_content = stream.getvalue()
     
     # Save to file system for URL access
-    task_id = state.task_id or str(uuid.uuid4())
-    filename = f"clash_checked_{task_id[:8]}.yaml"
-    filepath = os.path.join("exports", filename)
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(yaml_content)
+    filename = filename or f"clash_checked_{uuid.uuid4().hex}.yaml"
+    save_export("exports", filename, yaml_content)
 
     return {
         "yaml": yaml_content,
         "filename": filename,
-        "url": f"/exports/{filename}"
+        "url": f"/exports/{filename}",
+        "export_kind": "checked",
+        "updated_profile": updated_profile,
     }

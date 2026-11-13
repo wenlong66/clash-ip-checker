@@ -89,6 +89,8 @@ function app() {
         importName: '',
         qingyunti: { loading: false, error: '', nodeCount: 0 },
         exportIsFailover: false,
+        exportKind: '',
+        exportTargets: { profiles: [], target_profile_id: '', loading: false, error: '' },
         exportUpdatedProfile: '',
         isImporting: false,
         importSent: false,
@@ -529,12 +531,14 @@ function app() {
         },
 
         async exportQingyunti() {
-            if (this.qingyunti.loading || this.isExporting) return;
+            if (this.qingyunti.loading || this.isExporting || this.exportTargets.loading) return;
             this.qingyunti.loading = true;
             this.qingyunti.error = '';
             this.qingyunti.nodeCount = 0;
             try {
-                const res = await fetch('/api/qingyunti/export', { method: 'POST' });
+                const target = this.exportTargets.target_profile_id;
+                const url = '/api/qingyunti/export' + (target ? `?target_profile_id=${encodeURIComponent(target)}` : '');
+                const res = await fetch(url, { method: 'POST' });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.detail || '提取失败，请重试');
                 await this.showExport(data, '梯子导出');
@@ -547,8 +551,29 @@ function app() {
         },
 
         // Export
+        async loadExportTargets(kind) {
+            if (this.exportTargets.loading || this.isExporting || this.qingyunti.loading) return;
+            this.exportTargets.loading = true;
+            this.exportTargets.error = '';
+            try {
+                const res = await fetch(`/api/failover/profiles?kind=${kind}`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || '读取已有配置失败');
+                this.exportTargets.profiles = data.profiles.filter(profile => profile.export_filename);
+                if (!this.exportTargets.profiles.some(profile => profile.id === this.exportTargets.target_profile_id)) {
+                    this.exportTargets.target_profile_id = '';
+                }
+            } catch (e) {
+                this.exportTargets.profiles = [];
+                this.exportTargets.target_profile_id = '';
+                this.exportTargets.error = e.message;
+            } finally {
+                this.exportTargets.loading = false;
+            }
+        },
+
         async exportYaml() {
-            if (this.isExporting) return;
+            if (this.isExporting || this.exportTargets.loading) return;
             if (this.selected.length === 0) {
                 alert('请先选择要导出的节点');
                 return;
@@ -559,7 +584,7 @@ function app() {
                 const res = await fetch('/api/export', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ node_ids: this.selected })
+                    body: JSON.stringify({ node_ids: this.selected, target_profile_id: this.exportTargets.target_profile_id })
                 });
 
                 const data = await res.json();
@@ -580,6 +605,7 @@ function app() {
             this.exportUrl = data.url;
             this.importName = data.updated_profile || name || this.exportFilename.replace('.yaml', '');
             this.exportIsFailover = Boolean(data.failover);
+            this.exportKind = data.export_kind || (data.failover ? 'failover' : '');
             this.exportUpdatedProfile = data.updated_profile || '';
             this.importSent = false;
             this.$refs.exportModal.showModal();
@@ -627,10 +653,11 @@ function app() {
                 alert('未找到导出链接');
                 return;
             }
-            if (this.exportIsFailover) {
+            if (this.exportIsFailover || this.exportKind) {
                 this.isImporting = true;
                 try {
-                    const res = await fetch('/api/failover/profiles');
+                    const query = this.exportKind && this.exportKind !== 'failover' ? `?kind=${this.exportKind}` : '';
+                    const res = await fetch('/api/failover/profiles' + query);
                     const data = await res.json();
                     if (!res.ok) throw new Error(data.detail || '读取已有配置失败');
                     const existing = data.profiles.find(profile => profile.export_filename === this.exportFilename);
@@ -648,7 +675,7 @@ function app() {
             const fullUrl = encodeURIComponent(`${window.location.protocol}//${window.location.host}${this.exportUrl}`);
             const name = encodeURIComponent(this.importName.trim() || this.exportFilename.replace('.yaml', ''));
             // Schema: clash://install-config?url=xxx&name=xxx
-            this.importSent = this.exportIsFailover;
+            this.importSent = Boolean(this.exportIsFailover || this.exportKind);
             window.location.href = `clash://install-config?url=${fullUrl}&name=${name}`;
         }
     };

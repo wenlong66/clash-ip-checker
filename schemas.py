@@ -10,6 +10,7 @@ class UpdateNodeRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     node_ids: List[int]
+    target_profile_id: str = ''
 
 class RecheckRequest(BaseModel):
     config: Dict[str, Any] = {}

@@ -1,4 +1,7 @@
 import subprocess
+import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +14,11 @@ from routers.views import router as views_router
 
 class QingyuntiTests(unittest.TestCase):
     def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        previous = Path.cwd()
+        os.chdir(temporary.name)
+        self.addCleanup(os.chdir, previous)
         app = FastAPI()
         app.include_router(qingyunti.router)
         app.include_router(views_router)
@@ -19,27 +27,24 @@ class QingyuntiTests(unittest.TestCase):
         runner = patch.object(qingyunti.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, self.config, ''))
         self.run = runner.start()
         self.addCleanup(runner.stop)
-        saved = patch.object(qingyunti, 'latest_export', None)
-        saved.start()
-        self.addCleanup(saved.stop)
 
-    def test_export_and_protected_download_preserve_yaml_without_writing_files(self):
-        with patch('pathlib.Path.write_text') as write:
-            response = self.client.post('/api/qingyunti/export')
+    def test_export_and_protected_download_preserve_yaml_in_private_files(self):
+        response = self.client.post('/api/qingyunti/export')
         self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
         self.assertEqual(data['node_count'], 1)
         self.assertEqual(data['yaml'], self.config)
-        self.assertEqual(data['filename'], 'qingyunti-clash.yaml')
+        self.assertRegex(data['filename'], r'^qingyunti_[0-9a-f]{32}\.yaml$')
         self.assertEqual(response.headers['cache-control'], 'no-store')
-        write.assert_not_called()
+        self.assertEqual((Path('private_exports') / data['filename']).read_text(encoding='utf-8'), self.config)
+        self.assertFalse(Path('exports').exists())
         self.assertIn('--stdout', self.run.call_args.args[0])
         self.assertEqual(self.run.call_args.kwargs['timeout'], 90)
         downloaded = self.client.get(data['url'])
         self.assertEqual(downloaded.text, self.config)
         self.assertEqual(downloaded.headers['cache-control'], 'no-store')
         self.client.post('/api/qingyunti/export')
-        self.assertEqual(self.client.get(data['url']).status_code, 404)
+        self.assertEqual(self.client.get(data['url']).text, self.config)
 
     def test_rejects_remote_clients_hosts_and_cross_origin_requests_before_extraction(self):
         for headers in ({'host': 'example.invalid'}, {'origin': 'https://example.invalid'},

@@ -1,31 +1,31 @@
 """Export the local Qingyunti config using the existing isolated CLI."""
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
 from threading import Lock
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from ruamel.yaml import YAML, YAMLError
 
-from routers.failover import require_local
+from routers.failover import require_local, export_target
+from utils.exports import save_export
 
 router = APIRouter(prefix="/api/qingyunti", dependencies=[Depends(require_local)])
 export_lock = Lock()
-# shortcut: keep only the latest export in memory; use shared storage before enabling multiple workers.
-latest_export = None
 
 
 @router.post("/export")
-def export_qingyunti():
-    global latest_export
+def export_qingyunti(http_request: Request, target_profile_id: str = ''):
     if os.name != "nt":
         raise HTTPException(status_code=400, detail="请在安装梯子客户端的 Windows 电脑上运行网页服务")
     if not export_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="梯子配置正在提取中，请稍候")
     try:
+        filename, updated_profile = export_target(target_profile_id, http_request, "qingyunti")
         script = Path(__file__).resolve().parents[1] / "qingyunti-export" / "extract.py"
         try:
             result = subprocess.run(
@@ -57,10 +57,12 @@ def export_qingyunti():
         proxies = config.get("proxies") if isinstance(config, dict) else None
         if not isinstance(proxies, list) or not proxies:
             raise HTTPException(status_code=502, detail="导出脚本未返回有效节点配置，请重新提取")
-        token = uuid.uuid4().hex
-        latest_export = (token, result.stdout)
+        token = filename[len("qingyunti_"):-len(".yaml")] if filename else uuid.uuid4().hex
+        filename = filename or f"qingyunti_{token}.yaml"
+        save_export("private_exports", filename, result.stdout)
         return JSONResponse({"yaml": result.stdout, "node_count": len(proxies),
-                             "filename": "qingyunti-clash.yaml", "url": f"/api/qingyunti/download/{token}"},
+                             "filename": filename, "url": f"/api/qingyunti/download/{token}",
+                             "export_kind": "qingyunti", "updated_profile": updated_profile},
                             headers={"Cache-Control": "no-store"})
     finally:
         export_lock.release()
@@ -68,8 +70,13 @@ def export_qingyunti():
 
 @router.get("/download/{token}")
 def download_qingyunti(token: str):
-    snapshot = latest_export
-    if snapshot is None or snapshot[0] != token:
-        raise HTTPException(status_code=404, detail="导出已失效，请在梯子导出页面重新提取")
-    return Response(snapshot[1], media_type="application/yaml",
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="导出不存在，请在梯子导出页面重新提取")
+    try:
+        content = (Path("private_exports") / f"qingyunti_{token}.yaml").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="导出不存在，请在梯子导出页面重新提取") from None
+    except OSError:
+        raise HTTPException(status_code=500, detail="无法读取导出，请检查目录读取权限") from None
+    return Response(content, media_type="application/yaml",
                     headers={"Cache-Control": "no-store", "Content-Disposition": 'attachment; filename="qingyunti-clash.yaml"'})
