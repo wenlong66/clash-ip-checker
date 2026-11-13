@@ -17,6 +17,40 @@
 </head>
 
 <body>
+    {% macro node_picker(role, label) %}
+    <label id="failover-{{ role }}-label" for="failover-{{ role }}-node">{{ label }}</label>
+    <div class="node-picker" x-data="nodePicker(failover.{{ role }}, () => failoverNodes(failover.{{ role }}))"
+        @click.outside="open = false" @keydown.escape.prevent.stop="close()" @keydown.tab="open = false"
+        x-effect="if (failover.loading || isExporting || !failoverNodes(failover.{{ role }}).length) open = false">
+        <button id="failover-{{ role }}-node" type="button" class="node-picker-trigger" x-ref="trigger"
+            aria-haspopup="listbox" aria-controls="failover-{{ role }}-list" :aria-expanded="open"
+            aria-labelledby="failover-{{ role }}-label failover-{{ role }}-value"
+            :disabled="!failoverNodes(failover.{{ role }}).length || failover.loading || isExporting"
+            @click="open ? close() : show()" @keydown.arrow-down.prevent="move(1)" @keydown.arrow-up.prevent="move(-1)">
+            <span id="failover-{{ role }}-value" x-text="selection.node_name || '选择节点'"></span>
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+        </button>
+        <div class="node-picker-popup" :class="{'opens-up': above}" x-show="open" x-cloak>
+            <input type="search" x-ref="search" x-model="query" placeholder="搜索节点" aria-label="搜索{{ label }}"
+                role="combobox" aria-autocomplete="list" :aria-expanded="open" aria-controls="failover-{{ role }}-list"
+                :aria-activedescendant="options.length ? 'failover-{{ role }}-option-' + active : null"
+                @input="active = 0; $refs.list.scrollTop = 0"
+                @keydown.arrow-down.prevent="move(1)" @keydown.arrow-up.prevent="move(-1)"
+                @keydown.enter.prevent="choose(options[active])">
+            <div id="failover-{{ role }}-list" class="node-picker-list" role="listbox" aria-label="{{ label }}列表"
+                x-ref="list" @wheel.prevent.stop="scroll($event)">
+                <template x-for="(name, index) in options" :key="name">
+                    <button type="button" role="option" tabindex="-1" :id="'failover-{{ role }}-option-' + index"
+                        :data-index="index" :class="{'is-active': active === index}"
+                        :aria-selected="selection.node_name === name" @click="choose(name)" x-text="name"></button>
+                </template>
+                <p x-show="!options.length" role="status">没有匹配的节点</p>
+            </div>
+        </div>
+    </div>
+    {% endmacro %}
     <main class="container" x-data="app()" x-init="init()">
         <!-- Header -->
         <header style="padding-bottom: 0; margin-bottom: 1rem;">
@@ -80,14 +114,7 @@
                                     x-text="`${profile.name}（${profile.nodes.length} 个节点）`"></option>
                             </template>
                         </select>
-                        <label for="failover-primary-node">主用节点</label>
-                        <select id="failover-primary-node" x-model="failover.primary.node_name"
-                            :disabled="!failoverNodes(failover.primary).length || failover.loading || isExporting">
-                            <option value="">选择优先使用的节点</option>
-                            <template x-for="name in failoverNodes(failover.primary)" :key="name">
-                                <option :value="name" x-text="name"></option>
-                            </template>
-                        </select>
+                        {{ node_picker('primary', '主用节点') }}
                     </fieldset>
                     <fieldset>
                         <legend>第一备用</legend>
@@ -100,14 +127,7 @@
                                     x-text="`${profile.name}（${profile.nodes.length} 个节点）`"></option>
                             </template>
                         </select>
-                        <label for="failover-backup-node">备用节点</label>
-                        <select id="failover-backup-node" x-model="failover.backup.node_name"
-                            :disabled="!failoverNodes(failover.backup).length || failover.loading || isExporting">
-                            <option value="">选择主用不可用时接替的节点</option>
-                            <template x-for="name in failoverNodes(failover.backup)" :key="name">
-                                <option :value="name" x-text="name"></option>
-                            </template>
-                        </select>
+                        {{ node_picker('backup', '备用节点') }}
                     </fieldset>
                     <fieldset>
                         <legend>第二备用（可选）</legend>
@@ -120,14 +140,7 @@
                                     x-text="`${profile.name}（${profile.nodes.length} 个节点）`"></option>
                             </template>
                         </select>
-                        <label for="failover-backup2-node">备用节点</label>
-                        <select id="failover-backup2-node" x-model="failover.backup2.node_name"
-                            :disabled="!failoverNodes(failover.backup2).length || failover.loading || isExporting">
-                            <option value="">选择前两个节点不可用时接替的节点</option>
-                            <template x-for="name in failoverNodes(failover.backup2)" :key="name">
-                                <option :value="name" x-text="name"></option>
-                            </template>
-                        </select>
+                        {{ node_picker('backup2', '备用节点') }}
                     </fieldset>
                 </div>
                 <p x-show="duplicateFailoverNodes" class="error-text" role="status">主用和各备用请选择不同节点。</p>

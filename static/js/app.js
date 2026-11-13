@@ -2,6 +2,53 @@
  * Clash IP Checker - Alpine.js Application
  */
 
+function nodePicker(selection, getNodes) {
+    return {
+        selection,
+        open: false,
+        query: '',
+        active: 0,
+        above: false,
+        get options() {
+            const query = this.query.trim().toLocaleLowerCase();
+            return getNodes().filter(name => name.toLocaleLowerCase().includes(query));
+        },
+        show() {
+            this.query = '';
+            this.active = Math.max(0, getNodes().indexOf(selection.node_name));
+            const rect = this.$refs.trigger.getBoundingClientRect();
+            const popupHeight = Math.min(240, window.innerHeight * 0.4) + 100;
+            this.above = window.innerHeight - rect.bottom < popupHeight && rect.top > popupHeight;
+            this.open = true;
+            this.$nextTick(() => {
+                this.$refs.search.focus();
+                this.reveal();
+            });
+        },
+        close() {
+            this.open = false;
+            this.$refs.trigger.focus();
+        },
+        choose(name) {
+            if (!name) return;
+            selection.node_name = name;
+            this.close();
+        },
+        move(step) {
+            if (!this.open) { this.show(); return; }
+            this.active = Math.max(0, Math.min(this.options.length - 1, this.active + step));
+            this.$nextTick(() => this.reveal());
+        },
+        reveal() {
+            this.$refs.list.querySelector(`[data-index="${this.active}"]`)?.scrollIntoView({ block: 'nearest' });
+        },
+        scroll(event) {
+            const pixels = event.deltaY * (event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? 240 : 1);
+            this.$refs.list.scrollTop += Math.max(-32, Math.min(32, pixels));
+        }
+    };
+}
+
 function app() {
     return {
         // State

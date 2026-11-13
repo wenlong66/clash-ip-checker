@@ -405,6 +405,98 @@ td:last-child {
     display: none !important;
 }
 
+.node-picker {
+    position: relative;
+    margin-bottom: 1rem;
+}
+
+.node-picker-trigger,
+.node-picker-list button {
+    width: 100%;
+    text-align: left;
+    font-weight: 400;
+    letter-spacing: normal;
+    background: #1c222d;
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    box-shadow: none;
+    margin: 0;
+}
+
+.node-picker-trigger {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.node-picker-trigger span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.node-picker-trigger:hover,
+.node-picker-list button:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+.node-picker-trigger:hover {
+    background: #1c222d;
+}
+
+.node-picker-trigger svg {
+    flex-shrink: 0;
+    align-self: center;
+}
+
+.node-picker-list button:hover {
+    background: #1e3a5f;
+}
+
+.node-picker-popup {
+    position: absolute;
+    top: calc(100% + 0.25rem);
+    width: 100%;
+    z-index: 20;
+    background: #161b24;
+    border: 1px solid #475569;
+    border-radius: 8px;
+    padding: 0.5rem;
+}
+
+.node-picker-popup.opens-up {
+    top: auto;
+    bottom: calc(100% + 0.25rem);
+}
+
+.node-picker-popup input {
+    margin-bottom: 0.5rem;
+}
+
+.node-picker-list {
+    max-height: min(240px, 40vh);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.node-picker-list button {
+    padding: 0.6rem;
+    border: 0;
+    border-radius: 4px;
+    overflow-wrap: anywhere;
+}
+
+.node-picker-list button.is-active,
+.node-picker-list button[aria-selected="true"] {
+    background: #1e3a5f;
+}
+
+.node-picker-list p {
+    padding: 0.75rem;
+    margin: 0;
+}
+
 .failover-builder {
     height: auto;
     margin-bottom: 1.5rem;

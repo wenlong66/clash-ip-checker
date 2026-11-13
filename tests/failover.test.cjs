@@ -122,3 +122,32 @@ test('a new failover export only sends one native import request per preview', a
     await app.importToClash();
     assert.equal(lookups, 1);
 });
+
+test('node picker caps wheel distance and keeps small trackpad movements', () => {
+    const context = vm.createContext({});
+    vm.runInContext(readFileSync(join(__dirname, '../static/js/app.js'), 'utf8'), context);
+    const picker = context.nodePicker({ node_name: '' }, () => []);
+    picker.$refs = { list: { scrollTop: 100 } };
+    picker.scroll({ deltaY: 1200, deltaMode: 0 });
+    assert.equal(picker.$refs.list.scrollTop, 132);
+    picker.scroll({ deltaY: 3, deltaMode: 0 });
+    assert.equal(picker.$refs.list.scrollTop, 135);
+    picker.scroll({ deltaY: -3, deltaMode: 1 });
+    assert.equal(picker.$refs.list.scrollTop, 103);
+});
+
+test('node picker filters names and writes keyboard selection back to the form', () => {
+    const context = vm.createContext({});
+    vm.runInContext(readFileSync(join(__dirname, '../static/js/app.js'), 'utf8'), context);
+    const selection = { node_name: 'Japan 01' };
+    const picker = context.nodePicker(selection, () => ['Japan 01', 'Japan 02', 'US 01']);
+    let focused = false;
+    picker.$refs = { trigger: { focus() { focused = true; } } };
+    picker.open = true;
+    picker.query = 'jApAn';
+    assert.equal(picker.options.length, 2);
+    picker.choose(picker.options[1]);
+    assert.equal(selection.node_name, 'Japan 02');
+    assert.equal(picker.open, false);
+    assert.equal(focused, true);
+});
