@@ -11,4 +11,16 @@ templates = Jinja2Templates(directory=templates_dir)
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Render main page"""
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse("index.html", {"request": request, "page": "check"})
+
+
+@router.get("/failover", response_class=HTMLResponse)
+async def failover(request: Request):
+    """Render the independent failover configuration page."""
+    return templates.TemplateResponse("index.html", {"request": request, "page": "failover"})
+
+
+@router.get("/qingyunti", response_class=HTMLResponse)
+async def qingyunti(request: Request):
+    """Render the local Qingyunti export page."""
+    return templates.TemplateResponse("index.html", {"request": request, "page": "qingyunti"})

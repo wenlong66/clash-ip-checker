@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Clash 节点检测器</title>
+    <title>{% if page == 'qingyunti' %}梯子导出{% elif page == 'failover' %}Clash 主备切换配置{% else %}Clash 节点检测器{% endif %}</title>
     <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@latest/css/pico.min.css">
     <link rel="stylesheet" href="/static/css/style.css">
     <!-- CodeMirror for YAML syntax highlighting -->
@@ -24,10 +24,139 @@
                 ⚡ <span style="color: #10b981;">Clash</span> IP Checker
             </h1>
             <p style="font-size: 0.85rem; margin-bottom: 0.5rem; opacity: 0.7;">
-                粘贴 YAML 订阅 → 检测 IP 质量 → 编辑节点 → 导出
+                {% if page == 'qingyunti' %}打开梯子客户端 → 提取本机配置 → 导入 Clash{% elif page == 'failover' %}选择主用与备用节点 → 生成配置 → 导入 Clash{% else %}粘贴 YAML 订阅 → 检测 IP 质量 → 编辑节点 → 导出{% endif %}
             </p>
         </header>
 
+        <nav class="page-nav" aria-label="功能导航">
+            <a href="/" {% if page == 'check' %}aria-current="page"{% endif %}>IP 质量检测</a>
+            <a href="/failover" {% if page == 'failover' %}aria-current="page"{% endif %}>主备切换配置</a>
+            <a href="/qingyunti" {% if page == 'qingyunti' %}aria-current="page"{% endif %}>梯子导出</a>
+        </nav>
+
+        {% if page == 'qingyunti' %}
+        <section class="results-section failover-builder" aria-labelledby="qingyunti-heading">
+            <div class="results-header">
+                <h2 id="qingyunti-heading">梯子导出</h2>
+                <button @click="exportQingyunti" :disabled="qingyunti.loading || isExporting"
+                    :aria-busy="qingyunti.loading" x-text="qingyunti.loading ? '正在提取…' : '提取并预览'"></button>
+            </div>
+            <p>先在本机打开梯子客户端，登录并加载节点，再点击「提取并预览」。成功后可下载 YAML，或填写名称后直接导入 Clash。</p>
+            <p>网页服务和梯子客户端需运行在同一台 Windows 电脑上，请通过 localhost 或 127.0.0.1 打开网页。提取不会切换当前节点。</p>
+            <p>导出为静态配置，节点变更后需重新提取。配置包含节点凭据，请勿分享；重启网页服务或再次提取后，旧导入链接会失效。</p>
+            <p x-show="qingyunti.loading" role="status" x-cloak>正在读取已加载的配置，最多等待 90 秒…</p>
+            <p x-show="qingyunti.nodeCount" role="status" x-cloak>已提取 <span x-text="qingyunti.nodeCount"></span> 个节点。导入后请在 Clash 中启用新配置，保持网页服务运行直到导入完成。</p>
+            <p x-show="qingyunti.error" x-text="qingyunti.error" class="error-text" role="alert" x-cloak></p>
+        </section>
+        {% elif page == 'failover' %}
+        <section class="results-section failover-builder" aria-labelledby="failover-heading">
+            <div class="results-header">
+                <h2 id="failover-heading">主备切换配置</h2>
+                <button class="secondary" @click="loadFailoverProfiles" :disabled="failover.loading || isExporting"
+                    :aria-busy="failover.loading" x-text="failover.loaded ? '刷新本机订阅' : '读取本机 Clash 订阅'"></button>
+            </div>
+            <p class="failover-description">从 Clash Verge Rev 已有订阅中选择主用和最多两个备用节点，按“主用 → 第一备用 → 第二备用”的顺序自动切换，无需填写 YAML。</p>
+            <p x-show="!failover.loaded && !failover.loading" class="failover-note">读取当前电脑已保存的订阅，不会切换节点或启动检测。</p>
+            <p x-show="failover.loading" role="status">正在读取本机订阅…</p>
+            <p x-show="failover.loaded && failover.profiles.length === 0" role="status">还没有找到订阅，请先在 Clash Verge Rev 中添加订阅，再刷新。</p>
+            <div x-show="failover.profiles.length > 0" x-cloak>
+                <label for="failover-target">保存方式</label>
+                <select id="failover-target" x-model="failover.target_profile_id" :disabled="failover.loading || isExporting">
+                    <option value="">新增主备配置</option>
+                    <template x-for="profile in failoverTargets" :key="profile.id">
+                        <option :value="profile.id" x-text="`更新已有：${profile.name}`"></option>
+                    </template>
+                </select>
+                <p class="failover-note" x-show="failover.target_profile_id">复用原订阅地址，保存后在 Clash 对该订阅点一次“更新”，不会新增订阅。</p>
+                <div class="grid">
+                    <fieldset>
+                        <legend>主用节点</legend>
+                        <label for="failover-primary-profile">主用订阅</label>
+                        <select id="failover-primary-profile" x-model="failover.primary.profile_id"
+                            @change="failover.primary.node_name = ''" :disabled="failover.loading || isExporting">
+                            <option value="">选择主用订阅</option>
+                            <template x-for="profile in failover.profiles" :key="profile.id">
+                                <option :value="profile.id" :disabled="profile.nodes.length === 0"
+                                    x-text="`${profile.name}（${profile.nodes.length} 个节点）`"></option>
+                            </template>
+                        </select>
+                        <label for="failover-primary-node">主用节点</label>
+                        <select id="failover-primary-node" x-model="failover.primary.node_name"
+                            :disabled="!failoverNodes(failover.primary).length || failover.loading || isExporting">
+                            <option value="">选择优先使用的节点</option>
+                            <template x-for="name in failoverNodes(failover.primary)" :key="name">
+                                <option :value="name" x-text="name"></option>
+                            </template>
+                        </select>
+                    </fieldset>
+                    <fieldset>
+                        <legend>第一备用</legend>
+                        <label for="failover-backup-profile">备用订阅</label>
+                        <select id="failover-backup-profile" x-model="failover.backup.profile_id"
+                            @change="failover.backup.node_name = ''" :disabled="failover.loading || isExporting">
+                            <option value="">选择备用订阅，可与主用不同</option>
+                            <template x-for="profile in failover.profiles" :key="profile.id">
+                                <option :value="profile.id" :disabled="profile.nodes.length === 0"
+                                    x-text="`${profile.name}（${profile.nodes.length} 个节点）`"></option>
+                            </template>
+                        </select>
+                        <label for="failover-backup-node">备用节点</label>
+                        <select id="failover-backup-node" x-model="failover.backup.node_name"
+                            :disabled="!failoverNodes(failover.backup).length || failover.loading || isExporting">
+                            <option value="">选择主用不可用时接替的节点</option>
+                            <template x-for="name in failoverNodes(failover.backup)" :key="name">
+                                <option :value="name" x-text="name"></option>
+                            </template>
+                        </select>
+                    </fieldset>
+                    <fieldset>
+                        <legend>第二备用（可选）</legend>
+                        <label for="failover-backup2-profile">备用订阅</label>
+                        <select id="failover-backup2-profile" x-model="failover.backup2.profile_id"
+                            @change="failover.backup2.node_name = ''" :disabled="failover.loading || isExporting">
+                            <option value="">不使用第二备用</option>
+                            <template x-for="profile in failover.profiles" :key="profile.id">
+                                <option :value="profile.id" :disabled="profile.nodes.length === 0"
+                                    x-text="`${profile.name}（${profile.nodes.length} 个节点）`"></option>
+                            </template>
+                        </select>
+                        <label for="failover-backup2-node">备用节点</label>
+                        <select id="failover-backup2-node" x-model="failover.backup2.node_name"
+                            :disabled="!failoverNodes(failover.backup2).length || failover.loading || isExporting">
+                            <option value="">选择前两个节点不可用时接替的节点</option>
+                            <template x-for="name in failoverNodes(failover.backup2)" :key="name">
+                                <option :value="name" x-text="name"></option>
+                            </template>
+                        </select>
+                    </fieldset>
+                </div>
+                <p x-show="duplicateFailoverNodes" class="error-text" role="status">主用和各备用请选择不同节点。</p>
+                <div class="grid">
+                    <label for="failover-name" x-show="!failover.target_profile_id">配置名称
+                        <input id="failover-name" type="text" x-model="failover.name" placeholder="主备切换">
+                    </label>
+                    <label for="failover-interval">检测间隔
+                        <select id="failover-interval" x-model.number="failover.interval">
+                            <option :value="30">30 秒</option>
+                            <option :value="60">60 秒</option>
+                            <option :value="300">5 分钟</option>
+                        </select>
+                    </label>
+                </div>
+                <p class="failover-note">主用恢复后优先切回。默认使用 <a href="https://github.com/Loyalsoldier/clash-rules#白名单模式-rules-配置方式推荐" target="_blank" rel="noopener noreferrer">Loyalsoldier 白名单规则</a>，包含广告拦截、国内直连，其余流量走主备；规则集每 24 小时更新。节点为当前快照，订阅更新后可重新生成。</p>
+                <details class="failover-note" x-show="failover.profiles.some(profile => profile.error)">
+                    <summary>部分订阅暂不可用</summary>
+                    <template x-for="profile in failover.profiles.filter(profile => profile.error)" :key="profile.id">
+                        <p x-text="`${profile.name}：${profile.error}`"></p>
+                    </template>
+                </details>
+                <button @click="generateFailover" :disabled="!canGenerateFailover || isExporting || failover.loading"
+                    :aria-busy="isExporting" x-text="isExporting ? '正在保存…' : (failover.target_profile_id ? '更新主备配置' : '生成主备配置')"></button>
+            </div>
+            <p x-show="failover.error" x-text="failover.error" class="error-text" role="alert" x-cloak></p>
+        </section>
+
+        {% else %}
         <!-- Input Section (6:4 ratio) -->
         <div class="grid input-grid">
             <!-- YAML Input (60%) -->
@@ -204,6 +333,7 @@
                 </tbody>
             </table>
         </section>
+        {% endif %}
 
         <!-- Export Modal -->
         <dialog x-ref="exportModal">
@@ -216,12 +346,17 @@
                 <div id="export-editor" style="margin-bottom: 1rem;"></div>
                 <label for="clash-import-name">导入名称</label>
                 <input id="clash-import-name" type="text" x-model="importName"
-                    placeholder="填写 Clash 中显示的配置名称">
+                    placeholder="填写 Clash 中显示的配置名称" :disabled="!!exportUpdatedProfile">
+                <p x-show="exportUpdatedProfile" class="failover-note" role="status" x-cloak>
+                    已保存「<span x-text="exportUpdatedProfile"></span>」的订阅源。请在 Clash Verge Rev 的「订阅」页对原订阅点击“更新”；无需再次导入。
+                </p>
                 <footer>
                     <div style="display: flex; gap: 0.5rem; width: 100%;">
                         <button @click="downloadYaml">💾 下载</button>
                         <button class="secondary" @click="copyYaml">📋 复制</button>
-                        <button class="contrast" @click="importToClash" style="margin-left: auto;">🚀 导入 Clash</button>
+                        <button class="contrast" @click="importToClash" x-show="!exportUpdatedProfile"
+                            :disabled="isImporting || importSent" :aria-busy="isImporting" style="margin-left: auto;"
+                            x-text="importSent ? '已发送导入请求' : '🚀 导入 Clash'"></button>
                     </div>
                 </footer>
             </article>

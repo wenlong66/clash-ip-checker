@@ -39,6 +39,23 @@ function app() {
         exportFilename: '',
         exportUrl: '',
         importName: '',
+        qingyunti: { loading: false, error: '', nodeCount: 0 },
+        exportIsFailover: false,
+        exportUpdatedProfile: '',
+        isImporting: false,
+        importSent: false,
+        failover: {
+            profiles: [],
+            primary: { profile_id: '', node_name: '' },
+            backup: { profile_id: '', node_name: '' },
+            backup2: { profile_id: '', node_name: '' },
+            interval: 30,
+            name: '主备切换',
+            target_profile_id: '',
+            loading: false,
+            loaded: false,
+            error: ''
+        },
 
         // CodeMirror editor instance
         editor: null,
@@ -356,6 +373,99 @@ function app() {
             return 'shared-black';
         },
 
+        failoverNodes(selection) {
+            return this.failover.profiles.find(profile => profile.id === selection.profile_id)?.nodes || [];
+        },
+
+        get failoverTargets() {
+            return this.failover.profiles.filter(profile => profile.export_filename);
+        },
+
+        get canGenerateFailover() {
+            const { primary, backup, backup2 } = this.failover;
+            const selections = [primary, backup];
+            if (backup2.profile_id || backup2.node_name) selections.push(backup2);
+            return selections.every(selection => this.failoverNodes(selection).includes(selection.node_name))
+                && !this.duplicateFailoverNodes;
+        },
+
+        get duplicateFailoverNodes() {
+            const selections = [this.failover.primary, this.failover.backup, this.failover.backup2]
+                .filter(selection => selection.node_name);
+            return new Set(selections.map(selection => JSON.stringify([selection.profile_id, selection.node_name]))).size !== selections.length;
+        },
+
+        async loadFailoverProfiles() {
+            if (this.failover.loading) return;
+            this.failover.loading = true;
+            this.failover.error = '';
+            try {
+                const res = await fetch('/api/failover/profiles');
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || '读取订阅失败');
+                const firstLoad = !this.failover.loaded;
+                this.failover.profiles = data.profiles;
+                if (firstLoad && this.failoverTargets.length === 1) {
+                    this.failover.target_profile_id = this.failoverTargets[0].id;
+                } else if (!this.failoverTargets.some(profile => profile.id === this.failover.target_profile_id)) {
+                    this.failover.target_profile_id = '';
+                }
+                this.failover.loaded = true;
+                for (const selection of [this.failover.primary, this.failover.backup, this.failover.backup2]) {
+                    if (!data.profiles.some(profile => profile.id === selection.profile_id)) selection.profile_id = '';
+                    if (!this.failoverNodes(selection).includes(selection.node_name)) selection.node_name = '';
+                }
+            } catch (e) {
+                this.failover.error = e.message;
+            } finally {
+                this.failover.loading = false;
+            }
+        },
+
+        async generateFailover() {
+            if (this.isExporting || this.failover.loading || !this.canGenerateFailover) return;
+            this.isExporting = true;
+            this.failover.error = '';
+            try {
+                const res = await fetch('/api/failover/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        primary: this.failover.primary,
+                        backup: this.failover.backup,
+                        backup2: this.failover.backup2.node_name ? this.failover.backup2 : null,
+                        interval: Number(this.failover.interval),
+                        target_profile_id: this.failover.target_profile_id
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '生成失败，请检查节点和检测间隔');
+                await this.showExport(data, this.failover.name.trim() || '主备切换');
+            } catch (e) {
+                this.failover.error = e.message;
+            } finally {
+                this.isExporting = false;
+            }
+        },
+
+        async exportQingyunti() {
+            if (this.qingyunti.loading || this.isExporting) return;
+            this.qingyunti.loading = true;
+            this.qingyunti.error = '';
+            this.qingyunti.nodeCount = 0;
+            try {
+                const res = await fetch('/api/qingyunti/export', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || '提取失败，请重试');
+                await this.showExport(data, '梯子导出');
+                this.qingyunti.nodeCount = data.node_count;
+            } catch (e) {
+                this.qingyunti.error = e.message;
+            } finally {
+                this.qingyunti.loading = false;
+            }
+        },
+
         // Export
         async exportYaml() {
             if (this.isExporting) return;
@@ -376,37 +486,40 @@ function app() {
                 if (!res.ok) {
                     throw new Error(data.detail || '导出请求失败');
                 }
-                this.exportedYaml = data.yaml;
-                this.exportFilename = data.filename;
-                this.exportUrl = data.url;
-                this.importName = this.exportFilename.replace('.yaml', '');
-                this.$refs.exportModal.showModal();
-
-                // Initialize Export Editor
-                await this.$nextTick(() => {
-                    const el = document.getElementById('export-editor');
-                    if (!el) return;
-
-                    // Clear and recreate to avoid stale content
-                    el.innerHTML = '';
-                    const editor = CodeMirror(el, {
-                        mode: 'yaml',
-                        theme: 'material-darker',
-                        lineNumbers: true,
-                        readOnly: true,
-                        lineWrapping: true,
-                        value: this.exportedYaml
-                    });
-                    this.exportEditor = editor;
-                    // Refresh the raw instance so Alpine proxies do not alter CodeMirror internals.
-                    setTimeout(() => editor.refresh(), 50);
-                });
-
+                await this.showExport(data);
             } catch (e) {
                 alert(`导出失败: ${e.message}`);
             } finally {
                 this.isExporting = false;
             }
+        },
+
+        async showExport(data, name = '') {
+            this.exportedYaml = data.yaml;
+            this.exportFilename = data.filename;
+            this.exportUrl = data.url;
+            this.importName = data.updated_profile || name || this.exportFilename.replace('.yaml', '');
+            this.exportIsFailover = Boolean(data.failover);
+            this.exportUpdatedProfile = data.updated_profile || '';
+            this.importSent = false;
+            this.$refs.exportModal.showModal();
+
+            await this.$nextTick(() => {
+                const el = document.getElementById('export-editor');
+                if (!el) return;
+                el.innerHTML = '';
+                const editor = CodeMirror(el, {
+                    mode: 'yaml',
+                    theme: 'material-darker',
+                    lineNumbers: true,
+                    readOnly: true,
+                    lineWrapping: true,
+                    value: this.exportedYaml
+                });
+                this.exportEditor = editor;
+                // Refresh the raw instance so Alpine proxies do not alter CodeMirror internals.
+                setTimeout(() => editor.refresh(), 50);
+            });
         },
 
         downloadYaml() {
@@ -428,14 +541,34 @@ function app() {
             }
         },
 
-        importToClash() {
+        async importToClash() {
+            if (this.isImporting || this.importSent || this.exportUpdatedProfile) return;
             if (!this.exportUrl) {
                 alert('未找到导出链接');
                 return;
             }
+            if (this.exportIsFailover) {
+                this.isImporting = true;
+                try {
+                    const res = await fetch('/api/failover/profiles');
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || '读取已有配置失败');
+                    const existing = data.profiles.find(profile => profile.export_filename === this.exportFilename);
+                    if (existing) {
+                        this.exportUpdatedProfile = existing.name;
+                        return;
+                    }
+                } catch (e) {
+                    alert(`未导入：${e.message}`);
+                    return;
+                } finally {
+                    this.isImporting = false;
+                }
+            }
             const fullUrl = encodeURIComponent(`${window.location.protocol}//${window.location.host}${this.exportUrl}`);
             const name = encodeURIComponent(this.importName.trim() || this.exportFilename.replace('.yaml', ''));
             // Schema: clash://install-config?url=xxx&name=xxx
+            this.importSent = this.exportIsFailover;
             window.location.href = `clash://install-config?url=${fullUrl}&name=${name}`;
         }
     };

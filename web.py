@@ -13,6 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from routers.api import router as api_router
 from routers.views import router as views_router
+from routers.failover import router as failover_router
+from routers.qingyunti import router as qingyunti_router
 
 from contextlib import asynccontextmanager
 from state import state
@@ -40,6 +42,8 @@ app.mount("/exports", StaticFiles(directory=exports_dir), name="exports")
 # Include Routers
 app.include_router(views_router)
 app.include_router(api_router)
+app.include_router(failover_router)
+app.include_router(qingyunti_router)
 
 if __name__ == "__main__":
     import uvicorn

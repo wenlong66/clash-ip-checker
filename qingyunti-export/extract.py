@@ -6,6 +6,8 @@ import ctypes.wintypes as w
 import json
 from pathlib import Path
 import re
+import subprocess
+import sys
 
 import yaml
 
@@ -97,14 +99,36 @@ def extract(pid):
     return portable_config(found)
 
 
+def find_pid():
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+         "Get-Process -Name ApexCore -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id"],
+        capture_output=True, text=True, timeout=15, check=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    pids = result.stdout.split()
+    if not pids:
+        raise RuntimeError("未找到 ApexCore，请先启动青云梯极速版并加载节点")
+    if len(pids) != 1:
+        raise RuntimeError("存在多个 ApexCore 实例，请仅保留要导出的青云梯实例后重试")
+    return int(pids[0])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("pid", type=int, help="PID of the running ApexCore.exe")
+    parser.add_argument("pid", type=int, nargs="?", help="PID of ApexCore.exe; auto-detected if omitted")
+    parser.add_argument("--stdout", action="store_true", help="Write YAML to stdout without saving a file")
     args = parser.parse_args()
-    config = extract(args.pid)
+    try:
+        config = extract(args.pid if args.pid is not None else find_pid())
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        parser.exit(1, f"提取失败：{error}\n")
     target = Path(__file__).resolve().with_name("qingyunti-clash.yaml")
     text = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
     assert yaml.safe_load(text) == config
+    if args.stdout:
+        sys.stdout.write(text)
+        return
     target.write_text(text, encoding="utf-8")
     print(f"Exported {len(config['proxies'])} nodes to {target}")
 
