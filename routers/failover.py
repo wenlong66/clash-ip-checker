@@ -146,6 +146,11 @@ def export_failover(request: FailoverRequest, http_request: Request):
     config = {
         "mode": "rule",
         "log-level": "info",
+        # Proxifier may pass locally resolved IPs; recover TLS domains before routing.
+        "sniffer": {
+            "enable": True, "parse-pure-ip": True, "override-destination": True,
+            "sniff": {"TLS": {"ports": [443, 8443]}},
+        },
         "proxies": proxies,
         "proxy-groups": [
             {"name": "主备切换", "type": "fallback", "proxies": group_names,
@@ -159,7 +164,6 @@ def export_failover(request: FailoverRequest, http_request: Request):
                    "url": f"https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/{name}.txt",
                    "path": f"./ruleset/loyalsoldier/{name}.yaml", "interval": 86400}
             for name, behavior in (
-                ("applications", "classical"),
                 ("private", "domain"), ("reject", "domain"),
                 ("icloud", "domain"), ("apple", "domain"), ("google", "domain"),
                 ("proxy", "domain"), ("direct", "domain"),
@@ -167,7 +171,6 @@ def export_failover(request: FailoverRequest, http_request: Request):
             )
         },
         "rules": [
-            "RULE-SET,applications,DIRECT",
             "DOMAIN,clash.razord.top,DIRECT",
             "DOMAIN,yacd.haishan.me,DIRECT",
             "RULE-SET,private,DIRECT",

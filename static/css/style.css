@@ -470,12 +470,8 @@ td:last-child {
     bottom: calc(100% + 0.25rem);
 }
 
-.node-picker-popup input {
-    margin-bottom: 0.5rem;
-}
-
 .node-picker-list {
-    max-height: min(240px, 40vh);
+    max-height: min(480px, 65vh);
     overflow-y: auto;
     overscroll-behavior: contain;
 }

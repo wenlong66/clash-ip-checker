@@ -6,22 +6,23 @@ function nodePicker(selection, getNodes) {
     return {
         selection,
         open: false,
-        query: '',
         active: 0,
         above: false,
+        listHeight: 480,
         get options() {
-            const query = this.query.trim().toLocaleLowerCase();
-            return getNodes().filter(name => name.toLocaleLowerCase().includes(query));
+            return getNodes();
         },
         show() {
-            this.query = '';
             this.active = Math.max(0, getNodes().indexOf(selection.node_name));
             const rect = this.$refs.trigger.getBoundingClientRect();
-            const popupHeight = Math.min(240, window.innerHeight * 0.4) + 100;
-            this.above = window.innerHeight - rect.bottom < popupHeight && rect.top > popupHeight;
+            const height = Math.min(480, window.innerHeight * 0.65);
+            const below = window.innerHeight - rect.bottom - 12;
+            const above = rect.top - 12;
+            this.above = below < height + 18 && above > below;
+            this.listHeight = Math.max(80, Math.min(height, (this.above ? above : below) - 18));
             this.open = true;
             this.$nextTick(() => {
-                this.$refs.search.focus();
+                this.$refs.list.focus();
                 this.reveal();
             });
         },
@@ -91,6 +92,7 @@ function app() {
         exportUpdatedProfile: '',
         isImporting: false,
         importSent: false,
+        failoverSettingsRestored: false,
         failover: {
             profiles: [],
             primary: { profile_id: '', node_name: '' },
@@ -420,6 +422,37 @@ function app() {
             return 'shared-black';
         },
 
+        initFailover() {
+            try {
+                const saved = JSON.parse(localStorage.getItem('clash-ip-checker.failover.v1'));
+                if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+                    for (const role of ['primary', 'backup', 'backup2']) {
+                        const selection = saved[role];
+                        if (typeof selection?.profile_id === 'string' && typeof selection?.node_name === 'string') {
+                            this.failover[role] = { profile_id: selection.profile_id, node_name: selection.node_name };
+                        }
+                    }
+                    if (typeof saved.name === 'string') this.failover.name = saved.name;
+                    if ([30, 60, 300].includes(saved.interval)) this.failover.interval = saved.interval;
+                    if (typeof saved.target_profile_id === 'string') {
+                        this.failover.target_profile_id = saved.target_profile_id;
+                        this.failoverSettingsRestored = true;
+                    }
+                }
+            } catch {}
+            this.$watch('failover', () => this.saveFailoverSettings());
+            return this.loadFailoverProfiles();
+        },
+
+        saveFailoverSettings() {
+            const { primary, backup, backup2, interval, name, target_profile_id } = this.failover;
+            try {
+                localStorage.setItem('clash-ip-checker.failover.v1', JSON.stringify({
+                    primary, backup, backup2, interval, name, target_profile_id
+                }));
+            } catch {}
+        },
+
         failoverNodes(selection) {
             return this.failover.profiles.find(profile => profile.id === selection.profile_id)?.nodes || [];
         },
@@ -452,7 +485,7 @@ function app() {
                 if (!res.ok) throw new Error(data.detail || '读取订阅失败');
                 const firstLoad = !this.failover.loaded;
                 this.failover.profiles = data.profiles;
-                if (firstLoad && this.failoverTargets.length === 1) {
+                if (firstLoad && !this.failoverSettingsRestored && this.failoverTargets.length === 1) {
                     this.failover.target_profile_id = this.failoverTargets[0].id;
                 } else if (!this.failoverTargets.some(profile => profile.id === this.failover.target_profile_id)) {
                     this.failover.target_profile_id = '';

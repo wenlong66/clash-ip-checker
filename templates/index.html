@@ -33,20 +33,18 @@
             </svg>
         </button>
         <div class="node-picker-popup" :class="{'opens-up': above}" x-show="open" x-cloak>
-            <input type="search" x-ref="search" x-model="query" placeholder="搜索节点" aria-label="搜索{{ label }}"
-                role="combobox" aria-autocomplete="list" :aria-expanded="open" aria-controls="failover-{{ role }}-list"
-                :aria-activedescendant="options.length ? 'failover-{{ role }}-option-' + active : null"
-                @input="active = 0; $refs.list.scrollTop = 0"
-                @keydown.arrow-down.prevent="move(1)" @keydown.arrow-up.prevent="move(-1)"
-                @keydown.enter.prevent="choose(options[active])">
             <div id="failover-{{ role }}-list" class="node-picker-list" role="listbox" aria-label="{{ label }}列表"
-                x-ref="list" @wheel.prevent.stop="scroll($event)">
+                tabindex="0" x-ref="list" :style="{maxHeight: listHeight + 'px'}"
+                :aria-activedescendant="options.length ? 'failover-{{ role }}-option-' + active : null"
+                @wheel.prevent.stop="scroll($event)" @keydown.arrow-down.prevent="move(1)" @keydown.arrow-up.prevent="move(-1)"
+                @keydown.home.prevent="move(-Infinity)" @keydown.end.prevent="move(Infinity)"
+                @keydown.enter.prevent="choose(options[active])">
                 <template x-for="(name, index) in options" :key="name">
                     <button type="button" role="option" tabindex="-1" :id="'failover-{{ role }}-option-' + index"
                         :data-index="index" :class="{'is-active': active === index}"
                         :aria-selected="selection.node_name === name" @click="choose(name)" x-text="name"></button>
                 </template>
-                <p x-show="!options.length" role="status">没有匹配的节点</p>
+                <p x-show="!options.length" role="status">暂无节点</p>
             </div>
         </div>
     </div>
@@ -83,13 +81,14 @@
             <p x-show="qingyunti.error" x-text="qingyunti.error" class="error-text" role="alert" x-cloak></p>
         </section>
         {% elif page == 'failover' %}
-        <section class="results-section failover-builder" aria-labelledby="failover-heading">
+        <section class="results-section failover-builder" aria-labelledby="failover-heading" x-init="initFailover()">
             <div class="results-header">
                 <h2 id="failover-heading">主备切换配置</h2>
                 <button class="secondary" @click="loadFailoverProfiles" :disabled="failover.loading || isExporting"
                     :aria-busy="failover.loading" x-text="failover.loaded ? '刷新本机订阅' : '读取本机 Clash 订阅'"></button>
             </div>
             <p class="failover-description">从 Clash Verge Rev 已有订阅中选择主用和最多两个备用节点，按“主用 → 第一备用 → 第二备用”的顺序自动切换，无需填写 YAML。</p>
+            <p class="failover-note">当前浏览器会自动记住节点选择、保存方式、名称和检测间隔，刷新后恢复。刷新网页只重新读取本机订阅；修改后请先在这里保存配置，再到 Clash 更新原订阅。</p>
             <p x-show="!failover.loaded && !failover.loading" class="failover-note">读取当前电脑已保存的订阅，不会切换节点或启动检测。</p>
             <p x-show="failover.loading" role="status">正在读取本机订阅…</p>
             <p x-show="failover.loaded && failover.profiles.length === 0" role="status">还没有找到订阅，请先在 Clash Verge Rev 中添加订阅，再刷新。</p>
@@ -150,9 +149,9 @@
                     </label>
                     <label for="failover-interval">检测间隔
                         <select id="failover-interval" x-model.number="failover.interval">
-                            <option :value="30">30 秒</option>
-                            <option :value="60">60 秒</option>
-                            <option :value="300">5 分钟</option>
+                            <option value="30">30 秒</option>
+                            <option value="60">60 秒</option>
+                            <option value="300">5 分钟</option>
                         </select>
                     </label>
                 </div>

@@ -1,5 +1,6 @@
 import io
 import os
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -78,23 +79,29 @@ class FailoverTests(unittest.TestCase):
         self.assertEqual(groups[2]['proxies'], names[1:])
         self.assertEqual(config['rules'][-1], 'MATCH,主备切换')
         self.assertIn('GEOIP,CN,DIRECT', config['rules'])
+        sniffer = config['sniffer']
+        self.assertTrue(sniffer['enable'])
+        self.assertTrue(sniffer['parse-pure-ip'])
+        self.assertTrue(sniffer['override-destination'])
+        self.assertIn(443, sniffer['sniff']['TLS']['ports'])
         providers = config['rule-providers']
-        rule_sets = [rule.split(',')[1] for rule in config['rules'] if rule.startswith('RULE-SET,')]
+        rule_sets = re.findall(r'RULE-SET,([^,)]+)', ','.join(config['rules']))
         self.assertEqual(set(rule_sets), set(providers))
-        self.assertEqual(len(providers), 11)
+        self.assertEqual(len(providers), 10)
+        self.assertNotIn('applications', providers)
         for name, provider in providers.items():
             self.assertEqual(provider['type'], 'http')
             self.assertEqual(provider['interval'], 86400)
             self.assertEqual(provider['url'], f'https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/{name}.txt')
-            self.assertEqual(provider['behavior'], 'classical' if name == 'applications'
-                             else 'ipcidr' if name.endswith('cidr') else 'domain')
+            self.assertEqual(provider['behavior'], 'ipcidr' if name.endswith('cidr') else 'domain')
         rules = config['rules']
         self.assertLess(rules.index('RULE-SET,private,DIRECT'), rules.index('RULE-SET,reject,REJECT'))
         self.assertLess(rules.index('RULE-SET,reject,REJECT'), rules.index('RULE-SET,direct,DIRECT'))
         for name in ('google', 'proxy', 'telegramcidr'):
             self.assertIn(f'RULE-SET,{name},主备切换', rules)
-        for name in ('applications', 'private', 'icloud', 'apple', 'direct', 'lancidr', 'cncidr'):
+        for name in ('private', 'icloud', 'apple', 'direct', 'lancidr', 'cncidr'):
             self.assertIn(f'RULE-SET,{name},DIRECT', rules)
+        self.assertFalse(any('PROCESS-' in rule or 'applications' in rule for rule in rules))
         self.assertNotIn('secret', config)
         self.assertNotIn('OLD', result['yaml'])
         self.assertEqual((self.root / 'exports' / result['filename']).read_text(encoding='utf-8'), result['yaml'])

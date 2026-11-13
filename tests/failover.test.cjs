@@ -4,19 +4,84 @@ const { join } = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
 
-function setup(fetch) {
+function setup(fetch, localStorage) {
     const location = { protocol: 'http:', host: '127.0.0.1:18080', href: '' };
-    const context = vm.createContext({ fetch, window: { location }, alert() {} });
+    const context = vm.createContext({ fetch, localStorage, window: { location }, alert() {} });
     vm.runInContext(readFileSync(join(__dirname, '../static/js/app.js'), 'utf8'), context);
     const app = context.app();
     app.$refs = { exportModal: { showModal() {} } };
     app.$nextTick = async () => {};
+    app.$watch = (property, callback) => { app.testSaveSettings = callback; };
     app.testLocation = location;
     app.failover.profiles = [{ id: 'a', name: 'A', nodes: ['Japan'] }, { id: 'b', name: 'B', nodes: ['Japan'] }];
     app.failover.primary = { profile_id: 'a', node_name: 'Japan' };
     app.failover.backup = { profile_id: 'b', node_name: 'Japan' };
     return app;
 }
+
+test('failover form settings survive a reload without storing subscription contents', async () => {
+    let stored = null;
+    const storage = { getItem: () => stored, setItem: (key, value) => { stored = value; } };
+    const profiles = [{ id: 'a', name: 'A', nodes: ['Japan'], secret: 'not-for-storage' },
+        { id: 'b', name: 'B', nodes: ['Japan', 'US'] },
+        { id: 'old', name: 'Existing', nodes: [], export_filename: 'old.yaml' }];
+    const fetch = async () => ({ ok: true, json: async () => ({ profiles }) });
+    const app = setup(fetch, storage);
+    await app.initFailover();
+    app.failover.backup2 = { profile_id: 'b', node_name: 'US' };
+    app.failover.name = '我的主备';
+    app.failover.interval = 60;
+    app.testSaveSettings();
+    const saved = JSON.parse(stored);
+    assert.deepEqual(Object.keys(saved).sort(), ['backup', 'backup2', 'interval', 'name', 'primary', 'target_profile_id']);
+    assert.equal(stored.includes('not-for-storage'), false);
+    const reloaded = setup(fetch, storage);
+    reloaded.failover.primary.node_name = '';
+    await reloaded.initFailover();
+    assert.equal(reloaded.failover.primary.node_name, 'Japan');
+    assert.equal(reloaded.failover.backup.node_name, 'Japan');
+    assert.equal(reloaded.failover.backup2.node_name, 'US');
+    assert.equal(reloaded.failover.interval, 60);
+    assert.equal(reloaded.failover.name, '我的主备');
+    assert.equal(reloaded.failover.target_profile_id, 'old');
+});
+
+test('restoring settings clears stale nodes and preserves an explicit new-config choice', async () => {
+    for (const target of ['', 'deleted-target']) {
+        const app = setup(async () => ({ ok: true, json: async () => ({ profiles: [
+            { id: 'a', name: 'A', nodes: ['new-node'] },
+            { id: 'old', name: 'Existing', nodes: [], export_filename: 'old.yaml' }
+        ] }) }), { getItem: () => JSON.stringify({
+            primary: { profile_id: 'a', node_name: 'removed-node' },
+            backup: { profile_id: 'deleted-profile', node_name: 'Japan' },
+            target_profile_id: target
+        }) });
+        await app.initFailover();
+        assert.equal(app.failover.primary.profile_id, 'a');
+        assert.equal(app.failover.primary.node_name, '');
+        assert.equal(app.failover.backup.profile_id, '');
+        assert.equal(app.failover.backup.node_name, '');
+        assert.equal(app.failover.target_profile_id, '');
+    }
+});
+
+test('invalid or unavailable browser storage does not break the form', async () => {
+    const storages = [
+        { getItem: () => '{invalid json' },
+        { getItem: () => JSON.stringify({ primary: null, backup: 4, name: {}, interval: 1, target_profile_id: [] }) },
+        { getItem() { throw new Error('unavailable'); } }
+    ];
+    for (const storage of storages) {
+        storage.setItem = () => { throw new Error('unavailable'); };
+        const app = setup(async () => ({ ok: true, json: async () => ({ profiles: [] }) }), storage);
+        await app.initFailover();
+        assert.equal(app.failover.loaded, true);
+        assert.equal(app.failover.name, '主备切换');
+        assert.equal(app.failover.interval, 30);
+        assert.equal(app.failover.error, '');
+        assert.doesNotThrow(() => app.testSaveSettings());
+    }
+});
 
 test('same node names across subscriptions can generate with the chosen interval and import name', async () => {
     let request;
@@ -136,17 +201,20 @@ test('node picker caps wheel distance and keeps small trackpad movements', () =>
     assert.equal(picker.$refs.list.scrollTop, 103);
 });
 
-test('node picker filters names and writes keyboard selection back to the form', () => {
+test('node picker exposes all nodes and writes keyboard selection back to the form', () => {
     const context = vm.createContext({});
     vm.runInContext(readFileSync(join(__dirname, '../static/js/app.js'), 'utf8'), context);
     const selection = { node_name: 'Japan 01' };
     const picker = context.nodePicker(selection, () => ['Japan 01', 'Japan 02', 'US 01']);
     let focused = false;
-    picker.$refs = { trigger: { focus() { focused = true; } } };
+    picker.$refs = { trigger: { focus() { focused = true; } }, list: { querySelector() { return null; } } };
+    picker.$nextTick = callback => callback();
     picker.open = true;
-    picker.query = 'jApAn';
-    assert.equal(picker.options.length, 2);
-    picker.choose(picker.options[1]);
+    assert.equal(picker.options.length, 3);
+    picker.move(Infinity);
+    assert.equal(picker.active, 2);
+    picker.move(-1);
+    picker.choose(picker.options[picker.active]);
     assert.equal(selection.node_name, 'Japan 02');
     assert.equal(picker.open, false);
     assert.equal(focused, true);
