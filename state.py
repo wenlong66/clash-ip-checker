@@ -5,6 +5,7 @@ class AppState:
     def __init__(self):
         self.checker = IPChecker(headless=True)
         self.task_id: Optional[str] = None
+        self.check_task = None
         self.is_running: bool = False
         self.nodes: List[Dict] = []
         self.original_yaml: Dict = {}

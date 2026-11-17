@@ -69,6 +69,7 @@ function app() {
             skip_keywords_str: '剩余,重置,到期,有效期,官网,网址,更新,公告,建议'
         },
         isRunning: false,
+        isLoadingNodes: false,
         showProgress: false,
         progress: 0,
         total: 0,
@@ -153,75 +154,66 @@ function app() {
         isRechecking: false,  // Exclusive lock for recheck
 
         // Methods
-        async startCheck() {
+        async loadNodes() {
+            if (this.isRunning || this.isRechecking || this.isLoadingNodes) return;
             this.error = '';
-            this.progress = 0;
-            this.isRechecking = false;
-
+            this.isLoadingNodes = true;
             try {
-                // Validate first
-                const validateRes = await fetch('/api/validate', {
+                const res = await fetch('/api/prepare', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ yaml_content: this.yamlContent })
+                    body: JSON.stringify({ yaml_content: this.yamlContent, config: this.config })
                 });
-
-                const validateData = await validateRes.json();
-                if (!validateData.valid) {
-                    this.error = validateData.error;
+                const data = await res.json();
+                if (!res.ok) {
+                    this.error = typeof data.detail === 'string' ? data.detail : '加载节点失败，请检查配置';
                     return;
                 }
+                this.nodes = data.nodes;
+                this.selected = this.nodes.map(node => node.id);
+                this.progress = 0;
+                this.total = 0;
+                this.currentNode = '';
+                this.showProgress = false;
+            } catch (e) {
+                this.error = `加载节点失败: ${e.message}`;
+            } finally {
+                this.isLoadingNodes = false;
+            }
+        },
 
-                // Start check
-                const startRes = await fetch('/api/start', {
+        async startCheck() {
+            if (this.isRunning || this.isRechecking || this.isLoadingNodes) return;
+            this.error = '';
+            if (!this.selected.length) {
+                this.error = '请先加载节点并勾选需要检测的节点';
+                return;
+            }
+            const nodeIds = this.selected.map(Number);
+            this.isRunning = true;
+            try {
+                const res = await fetch('/api/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        yaml_content: this.yamlContent,
-                        config: this.config
+                        yaml_content: this.yamlContent, config: this.config, node_ids: nodeIds
                     })
                 });
-
-                if (!startRes.ok) {
-                    if (startRes.status === 409) {
-                        // Task is already running, just reconnect to SSE
-                        this.isRunning = true;
-                        this.showProgress = true;
-                        this.connectSSE();
-                        return;
-                    }
-                    const err = await startRes.json();
-                    this.error = err.detail;
-                    setTimeout(() => { this.error = null; }, 3000);
+                const data = await res.json();
+                if (!res.ok) {
+                    this.error = typeof data.detail === 'string' ? data.detail : '检测请求无效，请重新加载并选择节点';
+                    this.isRunning = false;
                     return;
                 }
-
-                const startData = await startRes.json();
-
-                // Reset State for new run
+                this.nodes = this.nodes.map(node => nodeIds.includes(node.id)
+                    ? { ...node, status: 'pending', error: null } : node);
                 this.progress = 0;
-                this.error = null;
-                this.total = startData.total;
-
-                this.isRunning = true;
+                this.total = data.total;
+                this.currentNode = '';
                 this.showProgress = true;
-
-                // Fetch initial nodes (pending state) immediately
-                try {
-                    const nodesRes = await fetch('/api/nodes');
-                    const nodesData = await nodesRes.json();
-                    this.nodes = nodesData.nodes;
-                    this.selected = this.nodes.map(n => n.id); // Default select all
-                } catch (e) {
-                    console.error("Initial nodes fetch failed", e);
-                    this.nodes = [];
-                    this.selected = [];
-                }
-
-                // Connect SSE
                 this.connectSSE();
-
             } catch (e) {
+                this.isRunning = false;
                 this.error = `请求失败: ${e.message}`;
             }
         },
@@ -266,6 +258,7 @@ function app() {
                     this.eventSource.close();
                     this.eventSource = null;
                 } else if (data.type === 'error') {
+                    this.error = data.error || '检测失败';
                     console.error('Node error:', data);
                 }
             };

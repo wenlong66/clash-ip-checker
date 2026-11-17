@@ -5,6 +5,9 @@ class StartRequest(BaseModel):
     yaml_content: str
     config: Dict[str, Any] = {}
 
+class SelectedCheckRequest(StartRequest):
+    node_ids: List[int] = Field(min_length=1)
+
 class UpdateNodeRequest(BaseModel):
     name: str
 

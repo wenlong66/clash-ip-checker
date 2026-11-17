@@ -21,7 +21,10 @@ from state import state
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Legacy Windows console encodings must not make emoji node names abort checks.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     yield
     # Shutdown
     print("[Web] Shutting down, cleaning up resources...")

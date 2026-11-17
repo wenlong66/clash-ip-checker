@@ -263,14 +263,20 @@
 
 
                     <div class="button-group">
-                        <button @click="startCheck" :disabled="isRunning || !yamlContent.trim()" :aria-busy="isRunning">
-                            <span x-show="!isRunning">🚀 开始检测</span>
+                        <button @click="loadNodes" class="secondary"
+                            :disabled="isRunning || isRechecking || isLoadingNodes || !yamlContent.trim()" :aria-busy="isLoadingNodes">
+                            加载节点
+                        </button>
+                        <button @click="startCheck"
+                            :disabled="isRunning || isRechecking || isLoadingNodes || selected.length === 0" :aria-busy="isRunning">
+                            <span x-show="!isRunning">🚀 检测选中 (<span x-text="selected.length"></span>)</span>
                             <span x-show="isRunning">检测中...</span>
                         </button>
                         <button @click="stopCheck" x-show="isRunning" class="secondary">
                             ⏹ 停止
                         </button>
                     </div>
+                    <small>先加载节点，再在下方勾选需要检测的节点。修改配置后请重新加载，重新加载会清空已有检测结果。</small>
                     <small x-show="error" x-text="error" class="error-text"
                         style="display: block; text-align: center; margin-top: 0.5rem; transition: all 0.3s ease;"></small>
                 </div>
@@ -328,7 +334,7 @@
                 </thead>
                 <tbody>
                     <template x-for="node in nodes" :key="node.id">
-                        <tr :class="{'degraded': node.source !== 'ping0'}">
+                        <tr :class="{'degraded': node.status === '⚠️ 降级' || node.status === '❌ 失败'}">
                             <td>
                                 <input type="checkbox" :value="node.id" x-model="selected">
                             </td>
@@ -349,6 +355,8 @@
                                 <span
                                     :class="{'source-ping0': node.source === 'ping0', 'source-ippure': node.source === 'ippure'}"
                                     x-text="node.source"></span>
+                                <small x-show="node.status && node.status !== 'pending'" x-text="node.status"></small>
+                                <small x-show="node.error" x-text="node.error"></small>
                             </td>
                             <td>
                                 <button class="small outline" @click="startEdit(node)">✏️</button>

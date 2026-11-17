@@ -1,6 +1,7 @@
 import asyncio
 import re
 import aiohttp
+from ipaddress import ip_address
 from typing import Optional, Dict
 
 # Strategies
@@ -17,12 +18,26 @@ class IPChecker:
         self.ippure = IPPureSource()
         self.browser_source = BrowserSource(headless=headless)
         
-        self.cache = {} # Map IP -> Result Dict
+        self.cache = {} # Map (mode, source, fallback, IP) -> Result Dict
 
     def clear_cache(self):
         """Clears the IP result cache."""
-        self.cache.clear()
+        self.cache = {}
         print("[IPChecker] Cache cleared.")
+
+    @staticmethod
+    def _is_usable_result(result):
+        if not result or result.get("error"):
+            return False
+        ip = result.get("ip")
+        score = result.get("pure_score")
+        if not isinstance(ip, str) or not isinstance(score, str) or not score.endswith("%"):
+            return False
+        try:
+            ip_address(ip)
+            return 0 <= float(score[:-1]) <= 100
+        except ValueError:
+            return False
 
     @property
     def headless(self):
@@ -63,12 +78,10 @@ class IPChecker:
         
         # 1. Cleaner Fast IP & Cache Logic
         current_ip = await self.get_simple_ip(proxy)
-        if current_ip and current_ip in self.cache:
-            # Strict mode: Only accept cache if it has bot_score (from browser check)
-            cached = self.cache[current_ip]
-            if "bot_score" in cached:
-                print(f"     [Cache Hit] {current_ip}")
-                return cached
+        cache_key = ("browser", "ippure", False, current_ip)
+        if current_ip and cache_key in self.cache:
+            print(f"     [Cache Hit] {current_ip}")
+            return self.cache[cache_key].copy()
         
         if current_ip:
             print(f"     [New IP] {current_ip}")
@@ -80,12 +93,17 @@ class IPChecker:
         
         # Inject IP if browser failed to find it but simple check passed
         if result["ip"] == "❓" and current_ip:
-            result["ip"] = current_ip
+            result = {**result, "ip": current_ip}
 
-        # Cache Update
-        if result["ip"] != "❓" and result["pure_score"] != "❓":
-            self.cache[result["ip"]] = result.copy()
-            
+        if not self._is_usable_result(result):
+            return {
+                **result,
+                "error": result.get("error") or "Browser returned no valid IP quality score",
+                "full_string": "【❌ Check Failed】",
+            }
+
+        cache_key = ("browser", "ippure", False, result["ip"])
+        self.cache = {**self.cache, cache_key: result.copy()}
         return result
 
     async def check_fast(self, proxy=None, source="ping0", fallback=True):
@@ -108,45 +126,24 @@ class IPChecker:
     
     async def _check_fast_impl(self, proxy=None, source="ping0", fallback=True):
         """Internal implementation of check_fast with prioritization"""
-        # 0. Check Cache First (Optimization)
         try:
             fast_ip = await self.get_simple_ip(proxy)
-            if fast_ip and fast_ip in self.cache:
-                # print(f"     [Cache Hit] {fast_ip}")
-                return self.cache[fast_ip]
         except Exception:
-            pass # Ignore fast check errors and proceed to normal check
+            print("     [Check] Fast IP lookup failed; trying quality sources")
+            fast_ip = None
+        cache_key = ("fast", source, fallback, fast_ip)
+        if fast_ip and cache_key in self.cache:
+            return self.cache[cache_key].copy()
 
-        # Helper wrappers to update cache
-        async def try_ping0():
-            res = await self.ping0.check(proxy)
-            if res and res.get("ip") and res["ip"] != "❓":
-                self.cache[res["ip"]] = res.copy()
-                return res
-            return None
-
-        async def try_ippure():
-            res = await self.ippure.check(proxy)
-            if res and res.get("ip") and res["ip"] != "❓":
-                self.cache[res["ip"]] = res.copy()
-                return res
-            return None
-
-        # Logic based on config
-        primary_task = try_ping0 if source == "ping0" else try_ippure
-        secondary_task = try_ippure if source == "ping0" else try_ping0
-        
-        # 1. Try Primary
-        result = await primary_task()
-        if result: 
-            return result
-            
-        # 2. Try Fallback if enabled
-        if fallback:
-            print(f"     [Check] {source} failed, falling back...")
-            fallback_result = await secondary_task()
-            if fallback_result:
-                return fallback_result
+        sources = (self.ping0, self.ippure) if source == "ping0" else (self.ippure, self.ping0)
+        for index, check_source in enumerate(sources if fallback else sources[:1]):
+            if index:
+                print(f"     [Check] {source} failed, falling back...")
+            result = await check_source.check(proxy)
+            if self._is_usable_result(result):
+                cache_key = ("fast", source, fallback, result["ip"])
+                self.cache = {**self.cache, cache_key: result.copy()}
+                return result
                 
         # 3. Failed
         return {

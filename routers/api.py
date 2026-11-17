@@ -10,7 +10,7 @@ from typing import Dict, List, Any
 
 # Local imports
 from state import state
-from schemas import StartRequest, UpdateNodeRequest, ExportRequest, RecheckRequest
+from schemas import StartRequest, SelectedCheckRequest, UpdateNodeRequest, ExportRequest, RecheckRequest
 from core.clash_api import ClashController
 from routers.failover import export_target
 from utils.exports import save_export
@@ -19,9 +19,15 @@ router = APIRouter(prefix="/api")
 yaml = YAML()
 yaml.preserve_quotes = True
 
+def _check_status(result: Dict, expected_source: str) -> str:
+    if result.get("error") or result.get("pure_score") in (None, "", "❓"):
+        return "❌ 失败"
+    return "✅" if result.get("source") == expected_source else "⚠️ 降级"
+
+
 # --- Helper Function to run check in background ---
-async def _run_check(proxies: List[Dict], config: Dict):
-    """Background task: check all nodes using Clash API"""
+async def _run_check(nodes: List[Dict], config: Dict):
+    """Background task: check the selected nodes using Clash API."""
     # Get config values
     api_url = config.get("clash_api_url", "http://127.0.0.1:9097")
     api_secret = config.get("clash_api_secret", "")
@@ -35,12 +41,12 @@ async def _run_check(proxies: List[Dict], config: Dict):
     state.checker.headless = headless
     
     # Check if empty
-    if not proxies:
+    if not nodes:
         state.is_running = False
         state.events.append({"type": "complete", "total": 0})
         return
-        
-    state.total = len(proxies)
+
+    state.total = len(nodes)
     
     # Initialize Clash controller
     controller = ClashController(api_url, api_secret)
@@ -67,11 +73,13 @@ async def _run_check(proxies: List[Dict], config: Dict):
     
     checked_count = 0
     
-    for i, proxy in enumerate(proxies):
+    for node in nodes:
         if not state.is_running:
             break
-        
-        name = proxy.get("name", f"Node {i}")
+
+        node_id = node["id"]
+        proxy = node["proxy_config"]
+        name = node.get("original_name", proxy.get("name", f"Node {node_id}"))
         state.current_node = name
         
         try:
@@ -81,16 +89,17 @@ async def _run_check(proxies: List[Dict], config: Dict):
             
             if not switched:
                 node_data = {
-                    "id": i,
+                    "id": node_id,
                     "original_name": name,
                     "name": f"{name}【❌ 切换失败】",
                     "ip": "❓",
                     "status": "❌ 切换失败",
                     "proxy_config": proxy
                 }
-                state.nodes[i] = node_data
+                state.nodes = [node_data if existing["id"] == node_id else existing for existing in state.nodes]
                 state.events.append({"type": "progress", "progress": checked_count + 1, "total": state.total, "node": node_data})
                 checked_count += 1
+                state.progress = checked_count
                 continue
             
             # 2. Wait for switch to take effect
@@ -103,7 +112,7 @@ async def _run_check(proxies: List[Dict], config: Dict):
                 result = await state.checker.check_browser(proxy=proxy_url)
             
             node_data = {
-                "id": i,
+                "id": node_id,
                 "original_name": name,
                 "name": f"{name}{result.get('full_string', '')}",
                 "ip": result.get("ip", "❓"),
@@ -113,10 +122,11 @@ async def _run_check(proxies: List[Dict], config: Dict):
                 "type": result.get("ip_attr", "❓"),
                 "native": result.get("ip_src", "❓"),
                 "source": result.get("source", "unknown"),
-                "status": "✅" if result.get("source") == "ping0" else "⚠️ 降级",
+                "status": _check_status(result, source if fast_mode else "ippure"),
+                "error": result.get("error"),
                 "proxy_config": proxy
             }
-            state.nodes[i] = node_data
+            state.nodes = [node_data if existing["id"] == node_id else existing for existing in state.nodes]
             
             # Push event
             checked_count += 1
@@ -129,7 +139,7 @@ async def _run_check(proxies: List[Dict], config: Dict):
             
         except Exception as e:
             node_data = {
-                "id": i,
+                "id": node_id,
                 "original_name": name,
                 "name": f"{name}【❌ Error】",
                 "ip": "❓",
@@ -137,12 +147,13 @@ async def _run_check(proxies: List[Dict], config: Dict):
                 "error": str(e),
                 "proxy_config": proxy
             }
-            state.nodes[i] = node_data
+            state.nodes = [node_data if existing["id"] == node_id else existing for existing in state.nodes]
             checked_count += 1
             state.events.append({
-                "type": "error",
-                "node_name": name,
-                "error": str(e)
+                "type": "progress",
+                "progress": checked_count,
+                "total": state.total,
+                "node": node_data
             })
         
         state.progress = checked_count
@@ -150,7 +161,7 @@ async def _run_check(proxies: List[Dict], config: Dict):
     # Complete
     state.is_running = False
     state.checker.clear_cache() # Clear cache on completion
-    state.events.append({"type": "complete", "total": len(state.nodes)})
+    state.events.append({"type": "complete", "total": state.total})
 
 
 # --- Routes ---
@@ -173,62 +184,70 @@ async def validate_yaml(request: StartRequest):
         return JSONResponse({"valid": False, "error": f"YAML 解析错误: {str(e)}"}, status_code=400)
 
 
-@router.post("/start")
-async def start_check(request: StartRequest):
-    """Start node checking task"""
-    if state.is_running:
-        raise HTTPException(status_code=409, detail="任务正在运行中")
-    
+@router.post("/prepare")
+async def prepare_nodes(request: StartRequest):
+    """Load nodes for selection without switching proxies or checking IPs."""
+    if state.is_running or (state.check_task and not state.check_task.done()):
+        raise HTTPException(status_code=409, detail="请等待当前检测任务结束")
     try:
         data = yaml.load(request.yaml_content)
-        proxies = data.get("proxies", [])
-        
-        if not proxies:
-            raise HTTPException(status_code=400, detail="未找到 proxies 节点")
-        
-        # Initialize state
-        state.task_id = str(uuid.uuid4())
-        state.is_running = True
-        state.original_yaml = data
-        state.nodes = []
-        state.events = []  # Clear previous events
-        state.progress = 0
-        # Filter proxies based on skip keywords
-        skip_keywords_str = request.config.get("skip_keywords_str", "")
-        skip_keywords = [kw.strip() for kw in skip_keywords_str.split(",") if kw.strip()]
-        
-        active_proxies = []
-        for p in proxies:
-            name = p.get("name", "")
-            if skip_keywords and any(kw in name for kw in skip_keywords):
-                print(f"[Web] Skipping (in start): {name}")
-                continue
-            active_proxies.append(p)
-            
-            # Pre-fill node for immediate display
-            state.nodes.append({
-                "id": len(active_proxies) - 1,
-                "original_name": name,
-                "name": name,
-                "ip": "...",
-                "risk": "",
-                "shared": "",
-                "type": "",
-                "native": "",
-                "source": "",
-                "status": "pending",
-                "proxy_config": p
-            })
-
-        state.total = len(active_proxies)
-        
-        # Start background task with filtered proxies
-        asyncio.create_task(_run_check(active_proxies, request.config))
-        
-        return {"task_id": state.task_id, "total": state.total}
-    
     except YAMLError as e:
         raise HTTPException(status_code=400, detail=f"YAML 解析错误: {str(e)}")
+    proxies = data.get("proxies") if isinstance(data, dict) else None
+    if not isinstance(proxies, list) or not proxies:
+        raise HTTPException(status_code=400, detail="未找到 proxies 节点")
+    if any(not isinstance(p, dict) or not isinstance(p.get("name"), str) or not p["name"].strip() for p in proxies):
+        raise HTTPException(status_code=400, detail="每个节点必须包含有效名称")
+    skip_keywords_str = request.config.get("skip_keywords_str", "")
+    if not isinstance(skip_keywords_str, str):
+        raise HTTPException(status_code=400, detail="跳过关键词必须为文本")
+    skip_keywords = [kw.strip() for kw in skip_keywords_str.split(",") if kw.strip()]
+    nodes = [
+        {
+            "id": index, "original_name": proxy["name"], "name": proxy["name"],
+            "ip": "...", "risk": "", "shared": "", "type": "", "native": "",
+            "source": "", "status": "pending", "proxy_config": proxy,
+        }
+        for index, proxy in enumerate(proxies)
+        if not any(keyword in proxy["name"] for keyword in skip_keywords)
+    ]
+    if not nodes:
+        raise HTTPException(status_code=400, detail="所有节点均被跳过关键词过滤")
+    state.original_yaml = data
+    state.nodes = nodes
+    state.events = []
+    state.progress = 0
+    state.total = len(nodes)
+    state.current_node = ""
+    state.checker.clear_cache()
+    return {"nodes": nodes}
+
+
+@router.post("/start")
+async def start_check(request: SelectedCheckRequest):
+    """Check only selected nodes from the loaded configuration."""
+    if state.is_running or (state.check_task and not state.check_task.done()):
+        raise HTTPException(status_code=409, detail="请等待当前检测任务结束")
+    try:
+        data = yaml.load(request.yaml_content)
+    except YAMLError as e:
+        raise HTTPException(status_code=400, detail=f"YAML 解析错误: {str(e)}")
+    if not state.nodes or data != state.original_yaml:
+        raise HTTPException(status_code=400, detail="配置已改变或尚未加载，请重新加载节点")
+    selected_ids = set(request.node_ids)
+    if len(selected_ids) != len(request.node_ids) or not selected_ids.issubset({node["id"] for node in state.nodes}):
+        raise HTTPException(status_code=400, detail="选中的节点无效或重复，请重新选择")
+
+    state.nodes = [{**node, "status": "pending", "error": None} if node["id"] in selected_ids else node for node in state.nodes]
+    selected_nodes = [node for node in state.nodes if node["id"] in selected_ids]
+    state.task_id = str(uuid.uuid4())
+    state.is_running = True
+    state.events = []
+    state.progress = 0
+    state.total = len(selected_nodes)
+    state.current_node = ""
+    state.check_task = asyncio.create_task(_run_check(selected_nodes, request.config))
+    return {"task_id": state.task_id, "total": state.total}
 
 
 @router.get("/progress")
@@ -373,7 +392,8 @@ async def recheck_node(node_id: int, request: RecheckRequest):
             "type": result.get("ip_attr", "❓"),
             "native": result.get("ip_src", "❓"),
             "source": result.get("source", "unknown"),
-            "status": "✅" if result.get("source") == "ping0" else "⚠️ 降级",
+            "status": _check_status(result, source if fast_mode else "ippure"),
+            "error": result.get("error"),
         })
         
         state.nodes[target_index] = node_data
