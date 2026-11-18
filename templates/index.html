@@ -60,7 +60,7 @@
     </select>
     <button type="button" class="secondary small" @click="loadExportTargets('{{ kind }}')"
         :disabled="exportTargets.loading || isExporting || qingyunti.loading" :aria-busy="exportTargets.loading">刷新已有配置</button>
-    <p class="failover-note" x-show="exportTargets.target_profile_id" x-cloak>复用原订阅地址。保存后到 Clash 更新原订阅，无需再次导入。</p>
+    <p class="failover-note" x-show="exportTargets.target_profile_id" x-cloak>复用原订阅地址。保存后在预览中点击「更新订阅」，无需再次导入。</p>
     <p class="failover-note" x-show="exportTargets.error" role="status" x-cloak>
         <span x-text="exportTargets.error"></span>；仍可新建配置。
     </p>
@@ -92,7 +92,7 @@
             {{ export_target('qingyunti') }}
             <p>先在本机打开梯子客户端，登录并加载节点，再点击「提取并预览」。成功后可下载 YAML，或填写名称后直接导入 Clash。</p>
             <p>网页服务和梯子客户端需运行在同一台 Windows 电脑上，请通过 localhost 或 127.0.0.1 打开网页。提取不会切换当前节点。</p>
-            <p>导出为静态配置，节点变更后需重新提取并保存，再到 Clash 更新订阅。配置保存在本机并包含节点凭据，请勿分享；再次提取或重启网页服务不会使已保存的地址失效，下载和更新时需保持网页服务运行。</p>
+            <p>导出为静态配置，节点变更后需重新提取并保存，再在导出预览中点击「更新订阅」。配置保存在本机并包含节点凭据，请勿分享；再次提取或重启网页服务不会使已保存的地址失效，下载和更新时需保持网页服务运行。</p>
             <p x-show="qingyunti.loading" role="status" x-cloak>正在读取已加载的配置，最多等待 90 秒…</p>
             <p x-show="qingyunti.nodeCount" role="status" x-cloak>已提取 <span x-text="qingyunti.nodeCount"></span> 个节点。导入后请在 Clash 中启用新配置，保持网页服务运行直到导入完成。</p>
             <p x-show="qingyunti.error" x-text="qingyunti.error" class="error-text" role="alert" x-cloak></p>
@@ -105,7 +105,7 @@
                     :aria-busy="failover.loading" x-text="failover.loaded ? '刷新本机订阅' : '读取本机 Clash 订阅'"></button>
             </div>
             <p class="failover-description">从 Clash Verge Rev 已有订阅中选择主用和最多两个备用节点，按“主用 → 第一备用 → 第二备用”的顺序自动切换，无需填写 YAML。</p>
-            <p class="failover-note">当前浏览器会自动记住节点选择、保存方式、名称和检测间隔，刷新后恢复。刷新网页只重新读取本机订阅；修改后请先在这里保存配置，再到 Clash 更新原订阅。</p>
+            <p class="failover-note">当前浏览器会自动记住节点选择、保存方式、名称和检测间隔，刷新后恢复。刷新网页只重新读取本机订阅；修改后请先在这里保存配置，再在导出预览中点击「更新订阅」。</p>
             <p x-show="!failover.loaded && !failover.loading" class="failover-note">读取当前电脑已保存的订阅，不会切换节点或启动检测。</p>
             <p x-show="failover.loading" role="status">正在读取本机订阅…</p>
             <p x-show="failover.loaded && failover.profiles.length === 0" role="status">还没有找到订阅，请先在 Clash Verge Rev 中添加订阅，再刷新。</p>
@@ -117,7 +117,7 @@
                         <option :value="profile.id" x-text="`更新已有：${profile.name}`"></option>
                     </template>
                 </select>
-                <p class="failover-note" x-show="failover.target_profile_id">复用原订阅地址，保存后在 Clash 对该订阅点一次“更新”，不会新增订阅。</p>
+                <p class="failover-note" x-show="failover.target_profile_id">复用原订阅地址，保存后在预览中点击「更新订阅」，不会新增订阅。</p>
                 <div class="grid">
                     <fieldset>
                         <legend>主用节点</legend>
@@ -386,9 +386,10 @@
                 <label for="clash-import-name">导入名称</label>
                 <input id="clash-import-name" type="text" x-model="importName"
                     placeholder="填写 Clash 中显示的配置名称" :disabled="!!exportUpdatedProfile">
-                <p x-show="exportUpdatedProfile" class="failover-note" role="status" x-cloak>
-                    已保存「<span x-text="exportUpdatedProfile"></span>」的订阅源。请在 Clash Verge Rev 的「订阅」页对原订阅点击“更新”；无需再次导入。
-                </p>
+                <p x-show="exportUpdatedProfile" class="failover-note" role="status" x-cloak
+                    x-text="subscriptionRefreshed ? `Clash 已更新「${exportUpdatedProfile}」。` : `已保存「${exportUpdatedProfile}」的订阅源，点击「更新订阅」同步到 Clash。`"></p>
+                <p x-show="subscriptionRefreshError" class="failover-note" role="alert" x-cloak
+                    x-text="subscriptionRefreshError"></p>
                 <footer>
                     <div style="display: flex; gap: 0.5rem; width: 100%;">
                         <button @click="downloadYaml">💾 下载</button>
@@ -396,13 +397,17 @@
                         <button class="contrast" @click="importToClash" x-show="!exportUpdatedProfile"
                             :disabled="isImporting || importSent" :aria-busy="isImporting" style="margin-left: auto;"
                             x-text="importSent ? '已发送导入请求' : '🚀 导入 Clash'"></button>
+                        <button class="contrast" @click="refreshClashSubscription" x-show="exportUpdatedProfileId" x-cloak
+                            :disabled="isRefreshingSubscription || subscriptionRefreshed" :aria-busy="isRefreshingSubscription"
+                            style="margin-left: auto;"
+                            x-text="isRefreshingSubscription ? '更新中…' : subscriptionRefreshed ? '已更新' : '更新订阅'"></button>
                     </div>
                 </footer>
             </article>
         </dialog>
     </main>
 
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v={{ app_js_version }}"></script>
 </body>
 
 </html>

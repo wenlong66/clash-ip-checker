@@ -45,6 +45,10 @@ def export_qingyunti(http_request: Request, target_profile_id: str = ''):
                 detail = "没有读取梯子客户端的权限，请以同一 Windows 用户运行网页服务并检查进程权限"
             elif "PID does not belong" in error:
                 detail = "梯子客户端安装路径与脚本不符，请核实并更新 extract.py 中的 APEX_CORE 路径"
+            elif "活动连接" in error or "Get-NetTCPConnection" in error:
+                detail = "请先在 Apex 连接一个节点并打开网页，保持连接后重新提取，以获取实际服务器地址"
+            elif "活动节点地址" in error:
+                detail = "无法读取或唯一匹配 Apex 节点地址，请保持客户端连接后重试；客户端升级后可能需要适配"
             elif "No module named" in error:
                 detail = "导出依赖缺失，请安装 requirements.txt 中的依赖后重试"
             else:
@@ -62,7 +66,8 @@ def export_qingyunti(http_request: Request, target_profile_id: str = ''):
         save_export("private_exports", filename, result.stdout)
         return JSONResponse({"yaml": result.stdout, "node_count": len(proxies),
                              "filename": filename, "url": f"/api/qingyunti/download/{token}",
-                             "export_kind": "qingyunti", "updated_profile": updated_profile},
+                             "export_kind": "qingyunti", "updated_profile": updated_profile,
+                             "updated_profile_id": target_profile_id if updated_profile else None},
                             headers={"Cache-Control": "no-store"})
     finally:
         export_lock.release()

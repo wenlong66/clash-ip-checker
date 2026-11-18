@@ -1,5 +1,13 @@
 from pydantic import BaseModel, Field
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Literal, Optional
+
+ExportKind = Literal['failover', 'checked', 'qingyunti']
+
+
+class SubscriptionRefreshRequest(BaseModel):
+    kind: ExportKind
+    filename: str = Field(min_length=1, max_length=100)
+
 
 class StartRequest(BaseModel):
     yaml_content: str

@@ -103,9 +103,41 @@ class FailoverTests(unittest.TestCase):
             self.assertIn(f'RULE-SET,{name},DIRECT', rules)
         self.assertFalse(any('PROCESS-' in rule or 'applications' in rule for rule in rules))
         self.assertNotIn('secret', config)
+        self.assertNotIn('hosts', config)
+        self.assertNotIn('dns', config)
         self.assertNotIn('OLD', result['yaml'])
         self.assertEqual((self.root / 'exports' / result['filename']).read_text(encoding='utf-8'), result['yaml'])
         self.assertEqual({p: p.read_bytes() for p in originals}, originals)
+
+    def test_export_preserves_selected_node_host_mappings(self):
+        hosts = {'primary.example.invalid': ['192.0.2.1'], 'backup.example.invalid': '192.0.2.2'}
+        for profile, server in zip(('a', 'b'), hosts):
+            self.write(f'profiles/{profile}.yaml', {
+                'proxies': [{'name': '日本 01', 'type': 'trojan', 'server': server, 'port': 443,
+                             'password': 'test-password', 'sni': server}],
+                'hosts': {server: hosts[server], 'unselected.example.invalid': '192.0.2.3'},
+                'dns': {'enable': True, 'use-hosts': True, 'proxy-server-nameserver': ['system']},
+            })
+        response = self.client.post('/api/failover/export', json=self.request)
+        self.assertEqual(response.status_code, 200, response.text)
+        config = self.yaml.load(response.json()['yaml'])
+        self.assertEqual(config.get('hosts'), hosts)
+        self.assertTrue(config['dns']['enable'])
+        self.assertTrue(config['dns']['use-hosts'])
+        self.assertEqual([(node['server'], node['sni']) for node in config['proxies']],
+                         [(server, server) for server in hosts])
+
+    def test_conflicting_selected_node_host_mappings_are_rejected(self):
+        server = 'shared.example.invalid'
+        for profile, address in (('a', '192.0.2.1'), ('b', '192.0.2.2')):
+            self.write(f'profiles/{profile}.yaml', {
+                'proxies': [{'name': '日本 01', 'type': 'http', 'server': server, 'port': 443}],
+                'hosts': {server: address},
+            })
+        response = self.client.post('/api/failover/export', json=self.request)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('地址映射冲突', response.json()['detail'])
+        self.assertFalse((self.root / 'exports').exists())
 
     def test_same_selection_stale_selection_and_invalid_interval_are_rejected(self):
         self.request['backup'] = self.request['primary'].copy()
@@ -154,6 +186,7 @@ class FailoverTests(unittest.TestCase):
         updated = response.json()
         self.assertEqual(updated['url'], old['url'])
         self.assertEqual(updated['updated_profile'], '已有主备')
+        self.assertEqual(updated['updated_profile_id'], 'generated')
         saved = self.yaml.load((self.root / 'exports' / old['filename']).read_text(encoding='utf-8'))
         self.assertEqual(saved['proxy-groups'][0]['interval'], 300)
         self.assertEqual(len(list((self.root / 'exports').iterdir())), 1)

@@ -93,6 +93,10 @@ function app() {
         exportKind: '',
         exportTargets: { profiles: [], target_profile_id: '', loading: false, error: '' },
         exportUpdatedProfile: '',
+        exportUpdatedProfileId: '',
+        isRefreshingSubscription: false,
+        subscriptionRefreshed: false,
+        subscriptionRefreshError: '',
         isImporting: false,
         importSent: false,
         failoverSettingsRestored: false,
@@ -600,6 +604,9 @@ function app() {
             this.exportIsFailover = Boolean(data.failover);
             this.exportKind = data.export_kind || (data.failover ? 'failover' : '');
             this.exportUpdatedProfile = data.updated_profile || '';
+            this.exportUpdatedProfileId = data.updated_profile_id || '';
+            this.subscriptionRefreshed = false;
+            this.subscriptionRefreshError = '';
             this.importSent = false;
             this.$refs.exportModal.showModal();
 
@@ -640,6 +647,32 @@ function app() {
             }
         },
 
+        async refreshClashSubscription() {
+            const profileId = this.exportUpdatedProfileId;
+            if (!profileId || this.isRefreshingSubscription || this.subscriptionRefreshed) return;
+            const filename = this.exportFilename;
+            const yaml = this.exportedYaml;
+            const isCurrentExport = () => this.exportFilename === filename && this.exportedYaml === yaml;
+            this.isRefreshingSubscription = true;
+            this.subscriptionRefreshError = '';
+            try {
+                const res = await fetch(`/api/failover/profiles/${encodeURIComponent(profileId)}/refresh`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ kind: this.exportKind, filename })
+                });
+                if (res.status !== 204) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(typeof data.detail === 'string' ? data.detail : '更新订阅失败，请重试');
+                }
+                if (isCurrentExport()) this.subscriptionRefreshed = true;
+            } catch (e) {
+                if (isCurrentExport()) this.subscriptionRefreshError = e.message;
+            } finally {
+                this.isRefreshingSubscription = false;
+            }
+        },
+
         async importToClash() {
             if (this.isImporting || this.importSent || this.exportUpdatedProfile) return;
             if (!this.exportUrl) {
@@ -656,6 +689,9 @@ function app() {
                     const existing = data.profiles.find(profile => profile.export_filename === this.exportFilename);
                     if (existing) {
                         this.exportUpdatedProfile = existing.name;
+                        this.exportUpdatedProfileId = existing.id || '';
+                        this.importName = existing.name;
+                        if (!this.exportKind && this.exportIsFailover) this.exportKind = 'failover';
                         return;
                     }
                 } catch (e) {

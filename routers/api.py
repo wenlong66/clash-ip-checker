@@ -469,4 +469,5 @@ async def export_yaml(request: ExportRequest, http_request: Request):
         "url": f"/exports/{filename}",
         "export_kind": "checked",
         "updated_profile": updated_profile,
+        "updated_profile_id": request.target_profile_id if updated_profile else None,
     }

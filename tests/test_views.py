@@ -1,3 +1,5 @@
+from hashlib import sha256
+from pathlib import Path
 import unittest
 
 from fastapi import FastAPI
@@ -29,6 +31,17 @@ class PageTests(unittest.TestCase):
         self.assertIn('href="/failover" aria-current="page"', failover.text)
         for page in (checker, failover):
             self.assertIn('x-ref="exportModal"', page.text)
+            self.assertIn('@click="refreshClashSubscription"', page.text)
+
+    def test_shared_page_script_url_changes_with_its_content(self):
+        app = FastAPI()
+        app.include_router(router)
+        script = Path(__file__).resolve().parents[1] / 'static/js/app.js'
+        version = sha256(script.read_bytes()).hexdigest()[:12]
+        with TestClient(app) as client:
+            for path in ('/', '/failover', '/qingyunti'):
+                with self.subTest(path=path):
+                    self.assertIn(f'src="/static/js/app.js?v={version}"', client.get(path).text)
 
 
 if __name__ == '__main__':

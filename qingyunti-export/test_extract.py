@@ -1,7 +1,9 @@
 import unittest
 from unittest.mock import patch
 import subprocess
+import json
 
+import extract as exporter
 from extract import RUNTIME_FIELDS, find_pid, main, parse_config, portable_config
 
 
@@ -38,6 +40,41 @@ class ExportTests(unittest.TestCase):
         expected = {"proxies": [{"name": "test", "type": "vless", "server": "example.com"}]}
         self.assertEqual(parse_config(b'proxies: [{name: test, type: vless, server: example.com}]'), expected)
         self.assertEqual(parse_config(b'{"proxies":[{"name":"test","type":"vless","server":"example.com"}]}'), expected)
+
+    def test_exports_live_server_hosts_without_changing_tls_or_credentials(self):
+        proxies = [
+            {"name": "HK", "server": "nodes.example.invalid", "port": 10001, "type": "vless", "uuid": "test-id", "servername": "tls.example.invalid"},
+            {"name": "JP", "server": "nodes.example.invalid", "port": 10002, "type": "vless"},
+        ]
+        config = {"proxies": proxies, "hosts": {"other.example.invalid": "192.0.2.9"},
+                  "dns": {"proxy-server-nameserver": ["https://private.example.invalid/dns-query"]}}
+        connections = [{"RemoteAddress": "192.0.2.1", "RemotePort": 10002},
+                       {"RemoteAddress": "192.0.2.2", "RemotePort": 443}]
+        with patch('extract.subprocess.run', return_value=subprocess.CompletedProcess([], 0, json.dumps(connections))) as run:
+            hosts = exporter.active_server_hosts(1234, proxies)
+        result = portable_config(config, hosts)
+        self.assertEqual(result["hosts"], {"other.example.invalid": "192.0.2.9", "nodes.example.invalid": ["192.0.2.1"]})
+        self.assertEqual(result["proxies"], proxies)
+        self.assertEqual(config["hosts"], {"other.example.invalid": "192.0.2.9"})
+        self.assertEqual(result["dns"]["proxy-server-nameserver"], ["system"])
+        self.assertIn('1234', run.call_args.args[0][-1])
+        self.assertEqual(run.call_args.kwargs['timeout'], 15)
+        self.assertTrue(run.call_args.kwargs['check'])
+
+    def test_rejects_missing_ambiguous_and_invalid_live_connections(self):
+        proxies = [{"name": "HK", "server": "nodes.example.invalid", "port": 10001}]
+        for connections in ([], [{"RemoteAddress": "192.0.2.1", "RemotePort": 443}],
+                            [{"RemoteAddress": "not-an-ip", "RemotePort": 10001}], {}):
+            with self.subTest(connections=connections), \
+                    patch('extract.subprocess.run', return_value=subprocess.CompletedProcess([], 0, json.dumps(connections))):
+                with self.assertRaises(RuntimeError):
+                    exporter.active_server_hosts(1234, proxies)
+        ambiguous = [*proxies, {"name": "JP", "server": "other.example.invalid", "port": 10001}]
+        with patch('extract.subprocess.run', return_value=subprocess.CompletedProcess([], 0, '[{"RemoteAddress":"192.0.2.1","RemotePort":10001}]')):
+            with self.assertRaises(RuntimeError):
+                exporter.active_server_hosts(1234, ambiguous)
+        with patch('extract.subprocess.run', return_value=subprocess.CompletedProcess([], 0, '[]')):
+            self.assertEqual(exporter.active_server_hosts(1234, [{"server": "2001:db8::1", "port": 10001}]), {})
 
     def test_removes_runtime_fields_and_preserves_nodes_and_rules(self):
         config = {key: "runtime value" for key in RUNTIME_FIELDS}

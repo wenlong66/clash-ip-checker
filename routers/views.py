@@ -1,12 +1,15 @@
+from hashlib import sha256
+from pathlib import Path
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-import os
 
 router = APIRouter()
 
-templates_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
-templates = Jinja2Templates(directory=templates_dir)
+project_dir = Path(__file__).resolve().parents[1]
+templates = Jinja2Templates(directory=project_dir / "templates")
+templates.env.globals["app_js_version"] = sha256((project_dir / "static/js/app.js").read_bytes()).hexdigest()[:12]
 
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):

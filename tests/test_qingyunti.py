@@ -60,6 +60,9 @@ class QingyuntiTests(unittest.TestCase):
                                 ('多个 ApexCore', '多个 ApexCore'),
                                 ('PermissionError: WinError 5', '权限'),
                                 ('PID does not belong', '安装路径'),
+                                ('未找到节点服务器的活动连接', '连接一个节点'),
+                                ('CalledProcessError: Get-NetTCPConnection', '连接一个节点'),
+                                ('无法唯一匹配 Apex 活动节点地址', '唯一匹配'),
                                 ("No module named 'yaml'", '依赖缺失'),
                                 ('unrelated sensitive output', '未能提取完整配置')]:
             self.run.return_value = subprocess.CompletedProcess([], 1, '', stderr)
@@ -85,7 +88,8 @@ class QingyuntiTests(unittest.TestCase):
         page = self.client.get('/qingyunti')
         self.assertEqual(page.status_code, 200)
         for text in ('<title>梯子导出</title>', 'id="qingyunti-heading"', 'x-ref="exportModal"',
-                     'href="/qingyunti" aria-current="page"', '@click="exportQingyunti"'):
+                     'href="/qingyunti" aria-current="page"', '@click="exportQingyunti"',
+                     '@click="refreshClashSubscription"'):
             self.assertIn(text, page.text)
         self.assertNotIn('id="yaml-editor"', page.text)
         self.assertNotIn('id="failover-heading"', page.text)

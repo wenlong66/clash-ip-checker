@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from ruamel.yaml import YAML
 
 from routers import api, failover, qingyunti
+from utils import clash_refresh
 
 
 class SubscriptionUpdateTests(unittest.TestCase):
@@ -65,6 +66,61 @@ class SubscriptionUpdateTests(unittest.TestCase):
         self.write_profiles()
         return data
 
+    def refresh(self, kind, filename, profile_id=None, **kwargs):
+        return self.client.post(f'/api/failover/profiles/{profile_id or kind}/refresh',
+                                json={'kind': kind, 'filename': filename}, **kwargs)
+
+    def test_refresh_updates_only_the_selected_generated_subscription(self):
+        for kind in ('checked', 'qingyunti', 'failover'):
+            with self.subTest(kind=kind):
+                if kind == 'failover':
+                    filename = 'clash_failover_' + 'a' * 32 + '.yaml'
+                    (self.root / 'exports' / filename).write_text('proxies: []\n', encoding='utf-8')
+                    self.items.append({'uid': kind, 'type': 'remote', 'name': kind, 'file': 'unused.yaml',
+                                       'url': 'http://127.0.0.1:18080/exports/' + filename})
+                    self.write_profiles()
+                else:
+                    filename = self.imported(kind)['filename']
+                with patch('routers.failover.refresh_subscription') as refresh:
+                    response = self.refresh(kind, filename)
+                self.assertEqual(response.status_code, 204, response.text)
+                refresh.assert_called_once()
+                self.assertEqual(refresh.call_args.args[0], kind)
+                self.assertEqual(refresh.call_args.args[1], self.root / 'profiles' / 'unused.yaml')
+                self.assertEqual(refresh.call_args.args[2].name, filename)
+
+    def test_refresh_rejects_other_files_cross_origin_and_ambiguous_names(self):
+        data = self.imported('checked')
+        with patch('routers.failover.refresh_subscription') as refresh:
+            self.assertEqual(self.refresh('checked', 'wrong.yaml').status_code, 400)
+            self.assertEqual(self.refresh('qingyunti', data['filename'], profile_id='checked').status_code, 400)
+            self.assertEqual(self.refresh('checked', data['filename'], headers={'origin': 'https://example.invalid'}).status_code, 403)
+            self.items.append({'uid': 'another', 'type': 'local', 'name': 'checked', 'file': 'other.yaml'})
+            self.write_profiles()
+            self.assertEqual(self.refresh('checked', data['filename']).status_code, 409)
+            refresh.assert_not_called()
+
+    @unittest.skipUnless(os.name == 'nt', 'Uses Windows subprocess flags')
+    def test_refresh_requires_clash_to_save_the_requested_yaml(self):
+        data = self.imported('checked')
+        profile = self.root / 'profiles' / 'unused.yaml'
+        profile.parent.mkdir()
+        profile.write_text(data['yaml'], encoding='utf-8')
+        old_time = profile.stat().st_mtime_ns
+        os.utime(profile, ns=(old_time, old_time - 1_000_000_000))
+        with patch.object(clash_refresh, 'time') as clock, \
+                patch.object(clash_refresh.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)):
+            clock.monotonic.side_effect = [0, 1, clash_refresh.SAVE_TIMEOUT]
+            self.assertEqual(self.refresh('checked', data['filename']).status_code, 504)
+
+        def save_profile(*args, **kwargs):
+            self.assertEqual(kwargs['env']['CLASH_REFRESH_PROFILE'], 'checked')
+            profile.write_text(data['yaml'], encoding='utf-8')
+            return subprocess.CompletedProcess([], 0)
+
+        with patch.object(clash_refresh.subprocess, 'run', side_effect=save_profile):
+            self.assertEqual(self.refresh('checked', data['filename']).status_code, 204)
+
     def test_new_configs_have_independent_durable_urls_and_updates_reuse_them(self):
         for kind in ('checked', 'qingyunti'):
             with self.subTest(kind=kind):
@@ -80,6 +136,7 @@ class SubscriptionUpdateTests(unittest.TestCase):
                 self.assertEqual(updated.status_code, 200, updated.text)
                 self.assertEqual(updated.json()['url'], first['url'])
                 self.assertEqual(updated.json()['updated_profile'], kind)
+                self.assertEqual(updated.json()['updated_profile_id'], kind)
                 self.assertNotEqual(updated.json()['yaml'], first['yaml'])
                 self.assertIn('B', self.client.get(first['url']).text)
                 self.assertEqual(self.client.get(second['url']).text, second['yaml'])

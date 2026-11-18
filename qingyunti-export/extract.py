@@ -3,6 +3,7 @@ import argparse
 import copy
 import ctypes as c
 import ctypes.wintypes as w
+from ipaddress import ip_address
 import json
 from pathlib import Path
 import re
@@ -36,12 +37,52 @@ def parse_config(raw):
     return config
 
 
-def portable_config(config):
+def active_server_hosts(pid, proxies):
+    domains = {p["server"] for p in proxies}
+    for server in tuple(domains):
+        try:
+            ip_address(server)
+        except ValueError:
+            continue
+        domains = domains - {server}
+    if not domains:
+        return {}
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+         f"ConvertTo-Json -Compress -InputObject @(Get-NetTCPConnection -OwningProcess {pid} "
+         "-State Established -ErrorAction Stop | Select-Object RemoteAddress,RemotePort)"],
+        capture_output=True, text=True, timeout=15, check=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    try:
+        connections = json.loads(result.stdout)
+        if not isinstance(connections, list):
+            raise ValueError("Expected a connection list")
+        ports = {int(p["port"]) for p in proxies}
+        if not all(0 < port < 65536 for port in ports):
+            raise ValueError("Invalid node port")
+        port_servers = {port: {p["server"] for p in proxies if int(p["port"]) == port} for port in ports}
+        endpoints = [(int(conn["RemotePort"]), str(ip_address(conn["RemoteAddress"]))) for conn in connections]
+    except (ValueError, TypeError, KeyError) as error:
+        raise RuntimeError("无法读取 Apex 活动节点地址，请保持客户端连接后重试") from error
+    if any(len(port_servers[port]) != 1 for port, _ in endpoints if port in port_servers):
+        raise RuntimeError("无法唯一匹配 Apex 活动节点地址，节点端口存在冲突")
+    # shortcut: match live sockets by unique node ports; use authenticated metadata if Apex shares ports across servers.
+    hosts = {server: sorted({address for port, address in endpoints
+                             if port_servers.get(port) == {server}}) for server in domains}
+    if not all(hosts.values()):
+        raise RuntimeError("未找到节点服务器的活动连接，请在 Apex 连接节点并打开网页后重新提取")
+    return hosts
+
+
+def portable_config(config, server_hosts=None):
     result = copy.deepcopy(config)
     for field in RUNTIME_FIELDS:
         result.pop(field, None)
     if isinstance(result.get("dns"), dict):
         result["dns"]["proxy-server-nameserver"] = ["system"]
+    if server_hosts:
+        result["hosts"] = {**(result.get("hosts") or {}), **server_hosts}
     return result
 
 
@@ -96,7 +137,7 @@ def extract(pid):
         kernel.CloseHandle(handle)
     if found is None:
         raise RuntimeError("No complete config found; keep Apex connected and retry, or recheck client version")
-    return portable_config(found)
+    return portable_config(found, active_server_hosts(pid, found["proxies"]))
 
 
 def find_pid():

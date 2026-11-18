@@ -6,12 +6,13 @@ from pathlib import Path
 import re
 from urllib.parse import urlsplit
 import uuid
-from typing import Literal
+from threading import Lock
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from ruamel.yaml import YAML, YAMLError
 
-from schemas import FailoverRequest
+from schemas import ExportKind, FailoverRequest, SubscriptionRefreshRequest
+from utils.clash_refresh import refresh_subscription
 from utils.exports import save_export
 
 
@@ -26,6 +27,7 @@ def require_local(request: Request):
 
 router = APIRouter(prefix="/api/failover", dependencies=[Depends(require_local)])
 SKIP_KEYWORDS = ("剩余", "重置", "到期", "有效期", "官网", "网址", "更新", "公告", "建议")
+refresh_lock = Lock()
 
 
 def profile_directory():
@@ -56,7 +58,7 @@ def local_profiles():
     return root, [item for item in items if isinstance(item, dict) and item.get("type") in ("local", "remote")]
 
 
-def profile_nodes(root, profile):
+def profile_path(root, profile):
     directory = (root / "profiles").resolve()
     filename = profile.get("file")
     if not isinstance(filename, str):
@@ -64,7 +66,15 @@ def profile_nodes(root, profile):
     path = (directory / filename).resolve()
     if not path.is_relative_to(directory):
         raise ValueError("订阅文件必须位于 Clash Verge Rev 的 profiles 目录中")
-    proxies = read_yaml(path).get("proxies", [])
+    return path
+
+
+def read_profile(root, profile):
+    return read_yaml(profile_path(root, profile))
+
+
+def profile_nodes(config):
+    proxies = config.get("proxies", [])
     if not isinstance(proxies, list):
         raise ValueError("订阅的 proxies 格式错误")
     nodes = [proxy for proxy in proxies if isinstance(proxy, dict)
@@ -113,7 +123,7 @@ def export_target(target_profile_id, http_request, kind):
 
 
 @router.get("/profiles")
-def list_profiles(http_request: Request, kind: Literal["failover", "checked", "qingyunti"] = "failover"):
+def list_profiles(http_request: Request, kind: ExportKind = "failover"):
     root, profiles = local_profiles()
     result = []
     for profile in profiles:
@@ -122,13 +132,37 @@ def list_profiles(http_request: Request, kind: Literal["failover", "checked", "q
         if filename:
             item["export_filename"] = filename
         try:
-            item["nodes"] = [node["name"] for node in profile_nodes(root, profile)]
+            item["nodes"] = [node["name"] for node in profile_nodes(read_profile(root, profile))]
             if not item["nodes"]:
                 item["error"] = "未找到独立节点；仅通过代理集合提供节点的订阅暂不支持"
         except ValueError as error:
             item["error"] = str(error)
         result.append(item)
     return {"profiles": result}
+
+
+@router.post("/profiles/{profile_id}/refresh", status_code=204)
+def refresh_profile(profile_id: str, request: SubscriptionRefreshRequest, http_request: Request):
+    if not refresh_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="正在更新 Clash 订阅，请稍候")
+    try:
+        root, profiles = local_profiles()
+        target = next((item for item in profiles if item.get("uid") == profile_id), None)
+        filename = exported_profile_filename(target, http_request, request.kind) if target else None
+        if filename != request.filename:
+            raise HTTPException(status_code=400, detail="订阅已变化或不属于当前导出，请刷新配置列表后重试")
+        name = target.get("name")
+        if not isinstance(name, str) or not name.strip() or sum(item.get("name") == name for item in profiles) != 1:
+            raise HTTPException(status_code=409, detail="Clash 订阅名称为空或重名，请使用唯一名称后重试")
+        try:
+            path = profile_path(root, target)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from None
+        directory = "private_exports" if request.kind == "qingyunti" else "exports"
+        refresh_subscription(name, path, Path(directory) / filename)
+        return Response(status_code=204)
+    finally:
+        refresh_lock.release()
 
 
 @router.post("/export")
@@ -147,12 +181,14 @@ def export_failover(request: FailoverRequest, http_request: Request):
         if not filename:
             raise HTTPException(status_code=400, detail="只能更新本网页生成且导出文件仍存在的主备配置，请刷新订阅列表")
     proxies = []
+    hosts = {}
     for role, selection in zip(("主用", "备用", "第二备用"), selections):
         profile = next((item for item in profiles if item.get("uid") == selection.profile_id), None)
         if profile is None:
             raise HTTPException(status_code=400, detail=f"{role}订阅已不存在，请刷新订阅列表")
         try:
-            nodes = profile_nodes(root, profile)
+            source = read_profile(root, profile)
+            nodes = profile_nodes(source)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=f"{role}订阅：{error}") from error
         node = next((node for node in nodes if node["name"] == selection.node_name), None)
@@ -160,6 +196,19 @@ def export_failover(request: FailoverRequest, http_request: Request):
             raise HTTPException(status_code=400, detail=f"{role}节点已变化，请刷新订阅列表后重新选择")
         if node.get("dialer-proxy"):
             raise HTTPException(status_code=400, detail=f"{role}节点依赖链式代理，请选择独立节点")
+        server = node["server"]
+        source_hosts = source.get("hosts")
+        source_dns = source.get("dns")
+        use_hosts = not isinstance(source_dns, dict) or source_dns.get("use-hosts") is not False
+        # shortcut: copy exact server mappings; expand patterns if a source requires wildcard hosts.
+        if use_hosts and isinstance(source_hosts, dict) and isinstance(server, str) and server in source_hosts:
+            mapping = source_hosts[server]
+            addresses = mapping if isinstance(mapping, list) else [mapping]
+            if not addresses or not all(isinstance(address, str) and address.strip() for address in addresses):
+                raise HTTPException(status_code=400, detail=f"{role}节点的服务器地址映射格式错误")
+            if server in hosts and hosts[server] != mapping:
+                raise HTTPException(status_code=400, detail=f"{role}节点与已选节点的服务器地址映射冲突，请换一个节点")
+            hosts = {**hosts, server: mapping}
         proxy = copy.deepcopy(node)
         proxy["name"] = f"{role} | {profile.get('name') or profile['uid']} | {node['name']}"
         proxies.append(proxy)
@@ -210,10 +259,14 @@ def export_failover(request: FailoverRequest, http_request: Request):
             "MATCH,主备切换",
         ],
     }
+    if hosts:
+        config = {**config, "hosts": hosts,
+                  "dns": {"enable": True, "use-hosts": True, "nameserver": ["system"]}}
     stream = io.StringIO()
     YAML().dump(config, stream)
     content = stream.getvalue()
     filename = filename or f"clash_failover_{uuid.uuid4().hex}.yaml"
     save_export("exports", filename, content)
     return {"yaml": content, "filename": filename, "url": f"/exports/{filename}", "failover": True,
-            "updated_profile": (target.get("name") or target["uid"]) if target else None}
+            "updated_profile": (target.get("name") or target["uid"]) if target else None,
+            "updated_profile_id": request.target_profile_id if target else None}

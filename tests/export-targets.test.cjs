@@ -14,6 +14,36 @@ function setup(fetch) {
     return { app, location };
 }
 
+for (const kind of ['checked', 'qingyunti', 'failover']) {
+    test(`${kind} refreshes the existing profile without launching an import`, async () => {
+        let settle;
+        let calls = 0;
+        const { app, location } = setup((url, options) => {
+            calls++;
+            assert.equal(url, '/api/failover/profiles/saved%20%26/refresh');
+            assert.equal(options.method, 'POST');
+            assert.deepEqual(JSON.parse(options.body), { kind, filename: 'saved.yaml' });
+            return new Promise(resolve => { settle = resolve; });
+        });
+        await app.showExport({ yaml: '', filename: 'saved.yaml', url: '/saved', export_kind: kind,
+            updated_profile: 'Existing', updated_profile_id: 'saved &' });
+        const first = app.refreshClashSubscription();
+        await app.refreshClashSubscription();
+        assert.equal(calls, 1);
+        assert.equal(app.isRefreshingSubscription, true);
+        settle({ ok: false, json: async () => ({ detail: '请先打开 Clash' }) });
+        await first;
+        assert.equal(app.subscriptionRefreshError, '请先打开 Clash');
+        assert.equal(app.isRefreshingSubscription, false);
+        const retry = app.refreshClashSubscription();
+        settle({ ok: true, status: 204 });
+        await retry;
+        assert.equal(app.subscriptionRefreshed, true);
+        assert.equal(app.subscriptionRefreshError, '');
+        assert.equal(location.href, '');
+    });
+}
+
 for (const kind of ['checked', 'qingyunti']) {
     test(`${kind} refresh filters update targets and clears stale or unreadable selections`, async () => {
         let response = { ok: true, json: async () => ({ profiles: [
