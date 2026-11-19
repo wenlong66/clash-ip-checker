@@ -14,6 +14,7 @@ from schemas import StartRequest, SelectedCheckRequest, UpdateNodeRequest, Expor
 from core.clash_api import ClashController
 from routers.failover import export_target
 from utils.exports import save_export
+from utils.network import import_url
 
 router = APIRouter(prefix="/api")
 yaml = YAML()
@@ -467,6 +468,7 @@ async def export_yaml(request: ExportRequest, http_request: Request):
         "yaml": yaml_content,
         "filename": filename,
         "url": f"/exports/{filename}",
+        "import_url": import_url(http_request, f"/exports/{filename}"),
         "export_kind": "checked",
         "updated_profile": updated_profile,
         "updated_profile_id": request.target_profile_id if updated_profile else None,

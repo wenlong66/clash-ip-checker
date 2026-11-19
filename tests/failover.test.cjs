@@ -179,11 +179,12 @@ test('a new failover export only sends one native import request per preview', a
     });
     app.exportIsFailover = true;
     app.exportUrl = '/exports/new.yaml';
+    app.exportImportUrl = 'http://10.12.64.8:18080/exports/new.yaml';
     app.exportFilename = 'new.yaml';
     app.importName = 'New';
     await app.importToClash();
     assert.equal(app.importSent, true);
-    assert.equal(new URL(app.testLocation.href).searchParams.get('url'), 'http://127.0.0.1:18080/exports/new.yaml');
+    assert.equal(new URL(app.testLocation.href).searchParams.get('url'), 'http://10.12.64.8:18080/exports/new.yaml');
     await app.importToClash();
     assert.equal(lookups, 1);
 });

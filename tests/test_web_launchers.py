@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from urllib.request import urlopen
 
 
 @unittest.skipUnless(os.name == 'nt', 'Windows batch files')
@@ -36,6 +37,17 @@ class WebLauncherTests(unittest.TestCase):
             except OSError:
                 time.sleep(0.1)
         self.fail(f'No listener on port {port}')
+
+    def wait_for_http(self, port):
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            try:
+                with urlopen(f'http://127.0.0.1:{port}/openapi.json', timeout=1) as response:
+                    self.assertEqual(response.status, 200)
+                    return
+            except OSError:
+                time.sleep(0.1)
+        self.fail(f'No HTTP listener on port {port}')
 
     def test_restart_stop_and_refuse_foreign_listener(self):
         temp = tempfile.TemporaryDirectory(prefix='web launchers ')
@@ -68,6 +80,45 @@ class WebLauncherTests(unittest.TestCase):
         self.assertEqual(self.launch(root, 'stop_web.bat').wait(timeout=15), 0)
         restarted.wait(timeout=5)
         self.assertEqual(self.launch(root, 'stop_web.bat').wait(timeout=15), 0)
+
+        legacy_server = (
+            'import json, sys\n'
+            'from http.server import BaseHTTPRequestHandler, HTTPServer\n'
+            'class Handler(BaseHTTPRequestHandler):\n'
+            '    def do_GET(self):\n'
+            '        title = sys.argv[1] if len(sys.argv) > 1 else "Clash IP Checker"\n'
+            '        body = json.dumps({"info": {"title": title}, "paths": {"/api/start": {}}}).encode()\n'
+            '        self.send_response(200)\n'
+            '        self.send_header("Content-Type", "application/json")\n'
+            '        self.end_headers()\n'
+            '        self.wfile.write(body)\n'
+            f'HTTPServer(("127.0.0.1", {port}), Handler).serve_forever()\n'
+        )
+        (root / 'web.py').write_text(legacy_server)
+        legacy = self.spawn([sys.executable, 'web.py'], cwd=root)
+        self.wait_for_http(port)
+        stopped = subprocess.run(
+            [os.environ['COMSPEC'], '/d', '/c', '.\\stop_web.bat'], cwd=root,
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=15,
+        )
+        self.assertEqual(stopped.returncode, 0, stopped.stderr.decode('ascii', errors='replace'))
+        legacy.wait(timeout=5)
+        for title in ('Clash IP Checker', 'Another App'):
+            with self.subTest(title=title):
+                (root / 'web.py').write_text(legacy_server.replace('"Clash IP Checker"', repr(title)))
+                legacy = self.spawn([sys.executable, 'web.py'], cwd=root)
+                self.wait_for_http(port)
+                restarted = self.launch(root, 'restart_web.bat')
+                if title == 'Clash IP Checker':
+                    legacy.wait(timeout=15)
+                    self.wait_for_http(port)
+                    self.assertEqual(restarted.poll(), None)
+                    self.assertEqual(self.launch(root, 'stop_web.bat').wait(timeout=15), 0)
+                    restarted.wait(timeout=5)
+                else:
+                    self.assertNotEqual(restarted.wait(timeout=15), 0)
+                    self.assertEqual(legacy.poll(), None)
+                    self.end_process(legacy)
 
         self.spawn([sys.executable, '-c', server])
         foreign_pid = self.listening_pid(port)

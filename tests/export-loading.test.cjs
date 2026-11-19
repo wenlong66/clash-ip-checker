@@ -62,6 +62,7 @@ test('empty selection does not start exporting', async () => {
 test('Clash import uses the custom name with URL encoding', () => {
     const { app, location } = setup();
     app.exportUrl = '/exports/nodes.yaml';
+    app.exportImportUrl = 'http://10.12.64.8:18080/exports/nodes.yaml';
     app.exportFilename = 'nodes.yaml';
     app.importName = '  我的订阅 & 测试 #1  ';
     app.importToClash();
@@ -69,16 +70,26 @@ test('Clash import uses the custom name with URL encoding', () => {
     assert.equal(link.protocol, 'clash:');
     assert.equal(link.hostname, 'install-config');
     assert.equal(link.searchParams.get('name'), '我的订阅 & 测试 #1');
-    assert.equal(link.searchParams.get('url'), 'http://127.0.0.1:18080/exports/nodes.yaml');
+    assert.equal(link.searchParams.get('url'), 'http://10.12.64.8:18080/exports/nodes.yaml');
 });
 
 test('Clash import falls back to the filename for a blank name', () => {
     const { app, location } = setup();
     app.exportUrl = '/exports/nodes.yaml';
+    app.exportImportUrl = 'http://10.12.64.8:18080/exports/nodes.yaml';
     app.exportFilename = 'nodes.yaml';
     app.importName = '   ';
     app.importToClash();
     assert.equal(new URL(location.href).searchParams.get('name'), 'nodes');
+});
+
+test('missing LAN IP blocks native import but preserves the downloadable YAML', async () => {
+    const { app, alerts, location } = setup();
+    await app.showExport({ yaml: 'proxies: []', filename: 'nodes.yaml', url: '/exports/nodes.yaml', import_url: null });
+    await app.importToClash();
+    assert.equal(location.href, '');
+    assert.match(alerts[0], /局域网 IP/);
+    assert.equal(app.exportedYaml, 'proxies: []');
 });
 
 test('Clash import without an export link does not navigate', () => {

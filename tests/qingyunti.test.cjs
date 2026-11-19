@@ -18,11 +18,13 @@ test('extract opens the shared preview with the protected import URL and default
         assert.equal(url, '/api/qingyunti/export');
         assert.equal(options.method, 'POST');
         return { ok: true, json: async () => ({ yaml: 'proxies: []', node_count: 62,
-            filename: 'qingyunti-clash.yaml', url: '/api/qingyunti/download/token' }) };
+            filename: 'qingyunti-clash.yaml', url: '/api/qingyunti/download/token',
+            import_url: 'http://10.12.64.8:18080/api/qingyunti/download/token' }) };
     });
     await app.exportQingyunti();
     assert.equal(app.importName, '梯子导出');
     assert.equal(app.exportUrl, '/api/qingyunti/download/token');
+    assert.equal(app.exportImportUrl, 'http://10.12.64.8:18080/api/qingyunti/download/token');
     assert.equal(app.qingyunti.nodeCount, 62);
     assert.equal(app.qingyunti.loading, false);
 });

@@ -23,6 +23,9 @@ class QingyuntiTests(unittest.TestCase):
         app.include_router(qingyunti.router)
         app.include_router(views_router)
         self.client = TestClient(app, base_url='http://127.0.0.1:18080', client=('127.0.0.1', 54321))
+        network_patch = patch('utils.network.lan_ip', return_value='10.12.64.8')
+        network_patch.start()
+        self.addCleanup(network_patch.stop)
         self.config = 'proxies:\n- {name: 测试, type: vless, server: example.invalid}\nrules: [MATCH,DIRECT]\n'
         runner = patch.object(qingyunti.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, self.config, ''))
         self.run = runner.start()

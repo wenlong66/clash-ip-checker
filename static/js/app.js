@@ -87,6 +87,7 @@ function app() {
         exportedYaml: '',
         exportFilename: '',
         exportUrl: '',
+        exportImportUrl: '',
         importName: '',
         qingyunti: { loading: false, error: '', nodeCount: 0 },
         exportIsFailover: false,
@@ -600,6 +601,7 @@ function app() {
             this.exportedYaml = data.yaml;
             this.exportFilename = data.filename;
             this.exportUrl = data.url;
+            this.exportImportUrl = data.import_url || '';
             this.importName = data.updated_profile || name || this.exportFilename.replace('.yaml', '');
             this.exportIsFailover = Boolean(data.failover);
             this.exportKind = data.export_kind || (data.failover ? 'failover' : '');
@@ -701,7 +703,11 @@ function app() {
                     this.isImporting = false;
                 }
             }
-            const fullUrl = encodeURIComponent(`${window.location.protocol}//${window.location.host}${this.exportUrl}`);
+            if (!this.exportImportUrl) {
+                alert('未检测到可用的本机局域网 IP，请连接局域网并重启网页服务；仍可下载 YAML');
+                return;
+            }
+            const fullUrl = encodeURIComponent(this.exportImportUrl);
             const name = encodeURIComponent(this.importName.trim() || this.exportFilename.replace('.yaml', ''));
             // Schema: clash://install-config?url=xxx&name=xxx
             this.importSent = Boolean(this.exportIsFailover || this.exportKind);

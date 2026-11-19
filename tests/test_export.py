@@ -64,7 +64,8 @@ rules: # leave unchanged
                 with patch.object(api.state, 'original_yaml', self.original), \
                      patch.object(api.state, 'nodes', self.nodes):
                     result = asyncio.run(api.export_yaml(ExportRequest(node_ids=node_ids),
-                                                        Request({'type': 'http'})))
+                                                        Request({'type': 'http', 'scheme': 'http', 'path': '/api/export',
+                                                                 'headers': [(b'host', b'127.0.0.1:18080')]})))
                     self.assertEqual(
                         (Path('exports') / result['filename']).read_text(encoding='utf-8'),
                         result['yaml'],

@@ -11,14 +11,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from ruamel.yaml import YAML, YAMLError
 
-from routers.failover import require_local, export_target
+from routers.failover import export_target
 from utils.exports import save_export
+from utils.network import import_url, require_download, require_local
 
-router = APIRouter(prefix="/api/qingyunti", dependencies=[Depends(require_local)])
+router = APIRouter(prefix="/api/qingyunti")
 export_lock = Lock()
 
 
-@router.post("/export")
+@router.post("/export", dependencies=[Depends(require_local)])
 def export_qingyunti(http_request: Request, target_profile_id: str = ''):
     if os.name != "nt":
         raise HTTPException(status_code=400, detail="请在安装梯子客户端的 Windows 电脑上运行网页服务")
@@ -66,6 +67,7 @@ def export_qingyunti(http_request: Request, target_profile_id: str = ''):
         save_export("private_exports", filename, result.stdout)
         return JSONResponse({"yaml": result.stdout, "node_count": len(proxies),
                              "filename": filename, "url": f"/api/qingyunti/download/{token}",
+                             "import_url": import_url(http_request, f"/api/qingyunti/download/{token}"),
                              "export_kind": "qingyunti", "updated_profile": updated_profile,
                              "updated_profile_id": target_profile_id if updated_profile else None},
                             headers={"Cache-Control": "no-store"})
@@ -73,7 +75,7 @@ def export_qingyunti(http_request: Request, target_profile_id: str = ''):
         export_lock.release()
 
 
-@router.get("/download/{token}")
+@router.get("/download/{token}", dependencies=[Depends(require_download)])
 def download_qingyunti(token: str):
     if not re.fullmatch(r"[0-9a-f]{32}", token):
         raise HTTPException(status_code=404, detail="导出不存在，请在梯子导出页面重新提取")

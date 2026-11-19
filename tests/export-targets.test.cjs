@@ -102,7 +102,8 @@ for (const kind of ['checked', 'qingyunti']) {
                 return { ok: true, json: async () => ({ profiles: existing
                     ? [{ name: 'Existing', export_filename: 'saved.yaml' }] : [] }) };
             });
-            await app.showExport({ yaml: '', filename: 'saved.yaml', url: '/saved', export_kind: kind });
+            await app.showExport({ yaml: '', filename: 'saved.yaml', url: '/saved', export_kind: kind,
+                import_url: 'http://10.12.64.8:18080/saved' });
             await app.importToClash();
             await app.importToClash();
             assert.equal(calls, 1);

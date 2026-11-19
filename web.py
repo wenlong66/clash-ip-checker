@@ -3,7 +3,8 @@ Clash IP Checker - Web Configuration Interface
 FastAPI backend with SSE progress and REST API
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import os
 import sys
@@ -18,6 +19,7 @@ from routers.qingyunti import router as qingyunti_router
 
 from contextlib import asynccontextmanager
 from state import state
+from utils.network import lan_ip, require_download, require_local
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,6 +33,19 @@ async def lifespan(app: FastAPI):
     await state.checker.stop()
 
 app = FastAPI(title="Clash IP Checker", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def restrict_lan_access(request: Request, call_next):
+    try:
+        if request.method in {"GET", "HEAD"} and (
+                request.url.path.startswith("/exports/") or request.url.path.startswith("/api/qingyunti/download/")):
+            require_download(request)
+        else:
+            require_local(request)
+    except HTTPException as error:
+        return JSONResponse({"detail": error.detail}, status_code=error.status_code)
+    return await call_next(request)
 
 # Mount supporting static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -50,4 +65,6 @@ app.include_router(qingyunti_router)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=18080)
+    address = lan_ip()
+    print(f"[Web] LAN subscription base: http://{address}:18080" if address else "[Web] LAN IP unavailable; YAML download remains available")
+    uvicorn.run(app, host="0.0.0.0", port=18080, proxy_headers=False)

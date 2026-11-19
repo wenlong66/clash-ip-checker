@@ -28,6 +28,7 @@ class SubscriptionUpdateTests(unittest.TestCase):
         self.yaml = YAML()
         self.write_profiles()
         for mocked in (
+            patch('utils.network.lan_ip', return_value='10.12.64.8'),
             patch.object(failover, 'profile_directory', return_value=self.root),
             patch.object(api.state, 'nodes', [{'id': 0, 'original_name': 'A', 'name': 'A',
                          'proxy_config': {'name': 'A', 'type': 'ss', 'server': 'example.invalid'}}]),
@@ -144,6 +145,25 @@ class SubscriptionUpdateTests(unittest.TestCase):
                 targets = [item['id'] for item in listing if item.get('export_filename')]
                 self.assertEqual(targets, [kind])
 
+    def test_lan_import_urls_keep_old_loopback_and_new_lan_targets_updatable(self):
+        for kind in ('checked', 'qingyunti'):
+            with self.subTest(kind=kind):
+                original = self.imported(kind)
+                self.assertEqual(original['import_url'], 'http://10.12.64.8:18080' + original['url'])
+                for host in ('10.12.64.8', '127.0.0.1'):
+                    self.items[-1] = {**self.items[-1], 'url': f'http://{host}:18080' + original['url']}
+                    self.write_profiles()
+                    local_lan = TestClient(self.client.app, base_url='http://10.12.64.8:18080', client=('10.12.64.8', 54321))
+                    listing = local_lan.get('/api/failover/profiles', params={'kind': kind})
+                    self.assertEqual(listing.status_code, 200)
+                    self.assertEqual(listing.json()['profiles'][-1]['export_filename'], original['filename'])
+                    updated = self.export(kind, kind)
+                    self.assertEqual(updated.status_code, 200, updated.text)
+                    self.assertEqual(updated.json()['url'], original['url'])
+                    with patch('routers.failover.refresh_subscription') as refresh:
+                        self.assertEqual(self.refresh(kind, original['filename']).status_code, 204)
+                        refresh.assert_called_once()
+
     def test_wrong_kind_missing_and_foreign_targets_cannot_overwrite_exports(self):
         old = self.imported('checked')
         self.assertEqual(self.export('qingyunti', 'checked').status_code, 400)
@@ -168,7 +188,7 @@ class SubscriptionUpdateTests(unittest.TestCase):
         (self.root / 'exports' / legacy).unlink()
         self.assertEqual(self.export('checked', 'checked').status_code, 400)
 
-    def test_failed_save_preserves_previous_content_and_private_exports_stay_local(self):
+    def test_failed_save_preserves_content_and_downloads_reject_foreign_hosts(self):
         for kind in ('checked', 'qingyunti'):
             old = self.imported(kind)
             with patch.object(Path, 'replace', side_effect=OSError('write failed')):

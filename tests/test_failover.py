@@ -22,6 +22,9 @@ class FailoverTests(unittest.TestCase):
         os.chdir(self.root)
         self.addCleanup(os.chdir, previous_cwd)
         (self.root / 'profiles').mkdir()
+        network_patch = patch('utils.network.lan_ip', return_value='10.12.64.8')
+        network_patch.start()
+        self.addCleanup(network_patch.stop)
         self.yaml = YAML()
         self.items = [
             {'uid': 'a', 'type': 'remote', 'name': '订阅 A', 'file': 'a.yaml', 'url': 'https://example.invalid/private-token'},
@@ -68,6 +71,7 @@ class FailoverTests(unittest.TestCase):
         response = self.client.post('/api/failover/export', json=self.request)
         self.assertEqual(response.status_code, 200, response.text)
         result = response.json()
+        self.assertEqual(result['import_url'], 'http://10.12.64.8:18080' + result['url'])
         config = self.yaml.load(result['yaml'])
         self.assertEqual([node['password'] for node in config['proxies']], ['password-a', 'password-b'])
         names = [node['name'] for node in config['proxies']]

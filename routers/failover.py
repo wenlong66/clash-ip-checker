@@ -14,15 +14,7 @@ from ruamel.yaml import YAML, YAMLError
 from schemas import ExportKind, FailoverRequest, SubscriptionRefreshRequest
 from utils.clash_refresh import refresh_subscription
 from utils.exports import save_export
-
-
-def require_local(request: Request):
-    local_hosts = {"127.0.0.1", "::1", "localhost"}
-    if not request.client or request.client.host not in local_hosts or request.url.hostname not in local_hosts:
-        raise HTTPException(status_code=403, detail="请通过本机 localhost 或 127.0.0.1 打开网页")
-    origin = request.headers.get("origin")
-    if origin and urlsplit(origin).netloc != request.url.netloc:
-        raise HTTPException(status_code=403, detail="仅允许当前网页读取本机订阅")
+from utils.network import import_url, local_hosts, require_local
 
 
 router = APIRouter(prefix="/api/failover", dependencies=[Depends(require_local)])
@@ -91,7 +83,7 @@ def exported_profile_filename(profile, http_request, kind="failover"):
     try:
         url = urlsplit(profile.get("url") or "")
         if (profile.get("type") != "remote" or url.scheme != http_request.url.scheme
-                or url.hostname not in {"127.0.0.1", "::1", "localhost"}
+                or url.hostname not in local_hosts()
                 or url.port != http_request.url.port or url.fragment):
             return None
     except ValueError:
@@ -268,5 +260,6 @@ def export_failover(request: FailoverRequest, http_request: Request):
     filename = filename or f"clash_failover_{uuid.uuid4().hex}.yaml"
     save_export("exports", filename, content)
     return {"yaml": content, "filename": filename, "url": f"/exports/{filename}", "failover": True,
+            "import_url": import_url(http_request, f"/exports/{filename}"),
             "updated_profile": (target.get("name") or target["uid"]) if target else None,
             "updated_profile_id": request.target_profile_id if target else None}
