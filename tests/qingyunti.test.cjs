@@ -4,6 +4,26 @@ const { join } = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
 
+test('Shadowrocket download stays local and uses the protected export token', async () => {
+    let clicked = false;
+    const context = vm.createContext({
+        fetch: async url => {
+            assert.equal(url, '/api/qingyunti/download/token/shadowrocket.txt');
+            return { ok: true, blob: async () => ({}) };
+        },
+        URL: { createObjectURL: () => 'blob:fixture', revokeObjectURL() {} },
+        document: { createElement: () => ({ click() { clicked = true; } }) },
+        alert() { throw new Error('Unexpected download error'); },
+    });
+    vm.runInContext(readFileSync(join(__dirname, '../static/js/app.js'), 'utf8'), context);
+    const app = context.app();
+    app.exportKind = 'qingyunti';
+    app.exportUrl = '/api/qingyunti/download/token';
+    await app.downloadShadowrocket();
+    assert.equal(clicked, true);
+    assert.equal(app.isExporting, false);
+});
+
 function setup(fetch) {
     const context = vm.createContext({ fetch });
     vm.runInContext(readFileSync(join(__dirname, '../static/js/app.js'), 'utf8'), context);

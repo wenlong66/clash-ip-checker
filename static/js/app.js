@@ -640,6 +640,28 @@ function app() {
             URL.revokeObjectURL(url);
         },
 
+        async downloadShadowrocket() {
+            if (this.exportKind !== 'qingyunti' || !this.exportUrl || this.isExporting) return;
+            this.isExporting = true;
+            try {
+                const response = await fetch(`${this.exportUrl}/shadowrocket.txt`);
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.detail || 'Shadowrocket 导出失败');
+                }
+                const url = URL.createObjectURL(await response.blob());
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'qingyunti-shadowrocket.txt';
+                link.click();
+                URL.revokeObjectURL(url);
+            } catch (error) {
+                alert(error.message || '下载失败，请重新提取');
+            } finally {
+                this.isExporting = false;
+            }
+        },
+
         async copyYaml() {
             try {
                 await navigator.clipboard.writeText(this.exportedYaml);

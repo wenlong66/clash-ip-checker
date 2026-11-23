@@ -87,6 +87,26 @@ class QingyuntiTests(unittest.TestCase):
         with qingyunti.export_lock:
             self.assertEqual(self.client.post('/api/qingyunti/export').status_code, 409)
 
+    def test_shadowrocket_download_converts_saved_nodes_and_is_local_only(self):
+        self.run.return_value = subprocess.CompletedProcess([], 0,
+            'proxies:\n- {name: Japan, type: vless, server: node.example.com, port: 443, '
+            'uuid: 9cb2e553-82f9-4f4f-95c3-6e013c2d49af, tls: true, servername: tls.example.com}\n'
+            'hosts: {node.example.com: [192.0.2.1]}\n', '')
+        exported = self.client.post('/api/qingyunti/export').json()
+        url = exported['url'] + '/shadowrocket.txt'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn('@192.0.2.1:443?', response.text)
+        self.assertIn('sni=tls.example.com', response.text)
+        self.assertEqual(response.headers['cache-control'], 'no-store')
+        self.assertIn('qingyunti-shadowrocket.txt', response.headers['content-disposition'])
+        remote = TestClient(self.client.app, base_url='http://127.0.0.1', client=('192.0.2.1', 54321))
+        self.assertEqual(remote.get(url).status_code, 403)
+        self.assertEqual(self.client.get('/api/qingyunti/download/invalid/shadowrocket.txt').status_code, 404)
+        self.run.return_value = subprocess.CompletedProcess([], 0, self.config, '')
+        invalid = self.client.post('/api/qingyunti/export').json()
+        self.assertEqual(self.client.get(invalid['url'] + '/shadowrocket.txt').status_code, 400)
+
     def test_dedicated_page_has_export_controls_shared_modal_and_navigation(self):
         page = self.client.get('/qingyunti')
         self.assertEqual(page.status_code, 200)

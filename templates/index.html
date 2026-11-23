@@ -90,7 +90,7 @@
                     :aria-busy="qingyunti.loading" x-text="qingyunti.loading ? '正在提取…' : '提取并预览'"></button>
             </div>
             {{ export_target('qingyunti') }}
-            <p>先在本机打开梯子客户端，登录并加载节点，再点击「提取并预览」。成功后可下载 YAML，或填写名称后直接导入 Clash。</p>
+            <p>先在本机打开梯子客户端，登录并加载节点，再点击「提取并预览」。成功后可下载 YAML 或导入 Clash；也可在预览中下载 Shadowrocket 文件，随后到服务器后台「VPN 管理 → 梯子导出」上传保存。</p>
             <p>网页服务和梯子客户端需运行在同一台 Windows 电脑上；本机操作可使用 localhost、127.0.0.1 或本机局域网 IP，导入地址统一使用本机局域网 IP。提取不会切换当前节点。</p>
             <p>导出为静态配置，节点变更后需重新提取并保存，再在导出预览中点击「更新订阅」。配置保存在本机并包含节点凭据，请勿分享；再次提取或重启网页服务不会使已保存的地址失效，下载和更新时需保持网页服务运行。</p>
             <p x-show="qingyunti.loading" role="status" x-cloak>正在读取已加载的配置，最多等待 90 秒…</p>
@@ -391,8 +391,10 @@
                 <p x-show="subscriptionRefreshError" class="failover-note" role="alert" x-cloak
                     x-text="subscriptionRefreshError"></p>
                 <footer>
-                    <div style="display: flex; gap: 0.5rem; width: 100%;">
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; width: 100%;">
                         <button @click="downloadYaml">💾 下载</button>
+                        <button class="secondary" @click="downloadShadowrocket" x-show="exportKind === 'qingyunti'"
+                            :disabled="isExporting" :aria-busy="isExporting" x-cloak>下载 Shadowrocket</button>
                         <button class="secondary" @click="copyYaml">📋 复制</button>
                         <button class="contrast" @click="importToClash" x-show="!exportUpdatedProfile"
                             :disabled="isImporting || importSent" :aria-busy="isImporting" style="margin-left: auto;"

@@ -13,6 +13,7 @@ from ruamel.yaml import YAML, YAMLError
 
 from routers.failover import export_target
 from utils.exports import save_export
+from utils.shadowrocket import shadowrocket_subscription
 from utils.network import import_url, require_download, require_local
 
 router = APIRouter(prefix="/api/qingyunti")
@@ -87,3 +88,24 @@ def download_qingyunti(token: str):
         raise HTTPException(status_code=500, detail="无法读取导出，请检查目录读取权限") from None
     return Response(content, media_type="application/yaml",
                     headers={"Cache-Control": "no-store", "Content-Disposition": 'attachment; filename="qingyunti-clash.yaml"'})
+
+
+@router.get("/download/{token}/shadowrocket.txt", dependencies=[Depends(require_local)])
+def download_shadowrocket(token: str):
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise HTTPException(status_code=404, detail="导出不存在，请重新提取")
+    try:
+        source = (Path("private_exports") / f"qingyunti_{token}.yaml").read_text(encoding="utf-8")
+        content = shadowrocket_subscription(YAML(typ="safe").load(source))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="导出不存在，请重新提取") from None
+    except OSError:
+        raise HTTPException(status_code=500, detail="无法读取导出，请检查本机文件权限") from None
+    except YAMLError:
+        raise HTTPException(status_code=400, detail="导出文件格式无效，请重新提取") from None
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    return Response(content, media_type="text/plain", headers={
+        "Cache-Control": "no-store",
+        "Content-Disposition": 'attachment; filename="qingyunti-shadowrocket.txt"',
+    })
