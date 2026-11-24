@@ -119,6 +119,18 @@ button.outline:hover {
     color: var(--primary);
 }
 
+.export-download-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    margin-top: 0.75rem;
+}
+
+.export-download-links a[aria-disabled="true"] {
+    opacity: 0.5;
+    cursor: wait;
+}
+
 /* Grid Layout */
 .input-grid {
     display: grid;

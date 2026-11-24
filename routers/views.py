@@ -14,16 +14,16 @@ templates.env.globals["app_js_version"] = sha256((project_dir / "static/js/app.j
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Render main page"""
-    return templates.TemplateResponse("index.html", {"request": request, "page": "check"})
+    return templates.TemplateResponse(request=request, name="index.html", context={"page": "check"})
 
 
 @router.get("/failover", response_class=HTMLResponse)
 async def failover(request: Request):
     """Render the independent failover configuration page."""
-    return templates.TemplateResponse("index.html", {"request": request, "page": "failover"})
+    return templates.TemplateResponse(request=request, name="index.html", context={"page": "failover"})
 
 
 @router.get("/qingyunti", response_class=HTMLResponse)
 async def qingyunti(request: Request):
     """Render the local Qingyunti export page."""
-    return templates.TemplateResponse("index.html", {"request": request, "page": "qingyunti"})
+    return templates.TemplateResponse(request=request, name="index.html", context={"page": "qingyunti"})

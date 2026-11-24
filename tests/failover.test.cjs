@@ -31,9 +31,10 @@ test('failover form settings survive a reload without storing subscription conte
     app.failover.backup2 = { profile_id: 'b', node_name: 'US' };
     app.failover.name = '我的主备';
     app.failover.interval = 60;
+    app.failover.policy = 'qingyunti';
     app.testSaveSettings();
     const saved = JSON.parse(stored);
-    assert.deepEqual(Object.keys(saved).sort(), ['backup', 'backup2', 'interval', 'name', 'primary', 'target_profile_id']);
+    assert.deepEqual(Object.keys(saved).sort(), ['backup', 'backup2', 'interval', 'name', 'policy', 'primary', 'target_profile_id']);
     assert.equal(stored.includes('not-for-storage'), false);
     const reloaded = setup(fetch, storage);
     reloaded.failover.primary.node_name = '';
@@ -42,6 +43,7 @@ test('failover form settings survive a reload without storing subscription conte
     assert.equal(reloaded.failover.backup.node_name, 'Japan');
     assert.equal(reloaded.failover.backup2.node_name, 'US');
     assert.equal(reloaded.failover.interval, 60);
+    assert.equal(reloaded.failover.policy, 'qingyunti');
     assert.equal(reloaded.failover.name, '我的主备');
     assert.equal(reloaded.failover.target_profile_id, 'old');
 });
@@ -68,7 +70,7 @@ test('restoring settings clears stale nodes and preserves an explicit new-config
 test('invalid or unavailable browser storage does not break the form', async () => {
     const storages = [
         { getItem: () => '{invalid json' },
-        { getItem: () => JSON.stringify({ primary: null, backup: 4, name: {}, interval: 1, target_profile_id: [] }) },
+        { getItem: () => JSON.stringify({ primary: null, backup: 4, name: {}, interval: 1, policy: 'unknown', target_profile_id: [] }) },
         { getItem() { throw new Error('unavailable'); } }
     ];
     for (const storage of storages) {
@@ -78,6 +80,7 @@ test('invalid or unavailable browser storage does not break the form', async () 
         assert.equal(app.failover.loaded, true);
         assert.equal(app.failover.name, '主备切换');
         assert.equal(app.failover.interval, 30);
+        assert.equal(app.failover.policy, 'loyalsoldier');
         assert.equal(app.failover.error, '');
         assert.doesNotThrow(() => app.testSaveSettings());
     }
@@ -91,9 +94,11 @@ test('same node names across subscriptions can generate with the chosen interval
     });
     app.failover.name = '我的主备';
     app.failover.interval = '60';
+    app.failover.policy = 'qingyunti';
     await app.generateFailover();
     assert.equal(request.url, '/api/failover/export');
     assert.equal(request.body.interval, 60);
+    assert.equal(request.body.policy, 'qingyunti');
     assert.equal(request.body.primary.profile_id, 'a');
     assert.equal(request.body.backup.profile_id, 'b');
     assert.equal(app.importName, '我的主备');

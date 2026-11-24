@@ -1,6 +1,5 @@
 """Export a loaded ApexCore Clash config without writing a memory dump."""
 import argparse
-import copy
 import ctypes as c
 import ctypes.wintypes as w
 from ipaddress import ip_address
@@ -12,11 +11,10 @@ import sys
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from utils.clash_config import portable_config
+
 APEX_CORE = Path(r"D:\Program Files (x86)\青云梯-极速版\ApexCore.exe")
-RUNTIME_FIELDS = (
-    "mixed-port", "port", "socks-port", "redir-port", "tproxy-port",
-    "external-controller", "secret", "tun", "interface-name", "auto-detect-interface",
-)
 
 
 def parse_config(raw):
@@ -73,17 +71,6 @@ def active_server_hosts(pid, proxies):
     if not all(hosts.values()):
         raise RuntimeError("未找到节点服务器的活动连接，请在 Apex 连接节点并打开网页后重新提取")
     return hosts
-
-
-def portable_config(config, server_hosts=None):
-    result = copy.deepcopy(config)
-    for field in RUNTIME_FIELDS:
-        result.pop(field, None)
-    if isinstance(result.get("dns"), dict):
-        result["dns"]["proxy-server-nameserver"] = ["system"]
-    if server_hosts:
-        result["hosts"] = {**(result.get("hosts") or {}), **server_hosts}
-    return result
 
 
 def extract(pid):

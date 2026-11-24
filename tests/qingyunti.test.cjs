@@ -4,23 +4,63 @@ const { join } = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
 
-test('Shadowrocket download stays local and uses the protected export token', async () => {
-    let clicked = false;
+for (const kind of ['nodes', 'rules']) {
+    test(`Shadowrocket ${kind} download uses its separate protected endpoint`, async () => {
+        const filename = kind === 'rules' ? 'shadowrocket-rules.conf' : 'shadowrocket.txt';
+        let downloaded;
+        const context = vm.createContext({
+            fetch: async url => {
+                assert.equal(url, `/api/qingyunti/download/token/${filename}`);
+                return { ok: true, blob: async () => ({}) };
+            },
+            URL: { createObjectURL: () => 'blob:fixture', revokeObjectURL() {} },
+            document: { createElement: () => {
+                const link = { click() { downloaded = link.download; } };
+                return link;
+            } },
+            alert() { throw new Error('Unexpected download error'); },
+        });
+        vm.runInContext(readFileSync(join(__dirname, '../static/js/app.js'), 'utf8'), context);
+        const app = context.app();
+        app.exportKind = 'qingyunti';
+        app.exportUrl = '/api/qingyunti/download/token';
+        if (kind === 'nodes') await app.downloadShadowrocket();
+        else await app.downloadShadowrocket(kind);
+        assert.equal(downloaded, `qingyunti-${filename}`);
+        assert.equal(app.isExporting, false);
+    });
+}
+
+test('Shadowrocket download ignores unsupported kinds and duplicate requests', async () => {
+    const app = setup(() => { throw new Error('Unexpected download request'); });
+    app.exportKind = 'qingyunti';
+    app.exportUrl = '/api/qingyunti/download/token';
+    await app.downloadShadowrocket('conf');
+    app.isExporting = true;
+    await app.downloadShadowrocket('rules');
+    app.isExporting = false;
+    app.exportKind = 'failover';
+    await app.downloadShadowrocket('rules');
+    app.exportKind = 'qingyunti';
+    app.exportUrl = '';
+    await app.downloadShadowrocket('rules');
+});
+
+test('Shadowrocket subscription download displays errors and allows retry', async () => {
+    let message;
     const context = vm.createContext({
         fetch: async url => {
             assert.equal(url, '/api/qingyunti/download/token/shadowrocket.txt');
-            return { ok: true, blob: async () => ({}) };
+            return { ok: false, json: async () => ({ detail: '节点无法转换' }) };
         },
-        URL: { createObjectURL: () => 'blob:fixture', revokeObjectURL() {} },
-        document: { createElement: () => ({ click() { clicked = true; } }) },
-        alert() { throw new Error('Unexpected download error'); },
+        alert(value) { message = value; },
     });
     vm.runInContext(readFileSync(join(__dirname, '../static/js/app.js'), 'utf8'), context);
     const app = context.app();
     app.exportKind = 'qingyunti';
     app.exportUrl = '/api/qingyunti/download/token';
     await app.downloadShadowrocket();
-    assert.equal(clicked, true);
+    assert.equal(message, '节点无法转换');
     assert.equal(app.isExporting, false);
 });
 

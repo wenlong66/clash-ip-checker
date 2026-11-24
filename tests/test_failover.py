@@ -162,6 +162,89 @@ class FailoverTests(unittest.TestCase):
         self.write('profiles/generated.yaml', self.yaml.load(result['yaml']))
         return result
 
+    def qingyunti_source(self):
+        source = self.yaml.load((self.root / 'profiles/a.yaml').read_text(encoding='utf-8'))
+        source.update({
+            'mode': 'global', 'ipv6': True, 'tcp-concurrent': True,
+            'tun': {'enable': True, 'device': 'apex', 'stack': 'mixed', 'dns-hijack': ['any:53']},
+            'dns': {'enable': True, 'listen': '127.0.0.1:1053', 'enhanced-mode': 'fake-ip',
+                    'nameserver': ['https://doh.pub/dns-query'], 'use-hosts': True,
+                    'proxy-server-nameserver': ['https://223.5.5.5/dns-query']},
+            'sniffer': {'enable': True, 'sniff': {'HTTP': {'ports': [80]}, 'TLS': {'ports': [443]}}},
+            'hosts': {'other.example.invalid': '192.0.2.10'},
+            'proxy-groups': [{'name': '青云出口', 'type': 'select', 'proxies': ['日本 01']}],
+            'rules': ['DOMAIN-SUFFIX,cn,DIRECT', 'GEOSITE,apple@cn,DIRECT',
+                      'AND,((NETWORK,UDP),(DST-PORT,443)),REJECT',
+                      'IP-CIDR,203.0.113.0/24,青云出口,no-resolve', 'MATCH,青云出口'],
+        })
+        self.write('profiles/a.yaml', source)
+        return source
+
+    def test_qingyunti_policy_keeps_primary_dns_and_ordered_rules_with_only_selected_nodes(self):
+        source = self.qingyunti_source()
+        original = (self.root / 'profiles/a.yaml').read_bytes()
+        self.request['policy'] = 'qingyunti'
+        response = self.client.post('/api/failover/export', json=self.request)
+        self.assertEqual(response.status_code, 200, response.text)
+        config = self.yaml.load(response.json()['yaml'])
+        self.assertEqual(config['mode'], 'rule')
+        self.assertEqual(config['dns'], {k: v for k, v in source['dns'].items() if k != 'listen'})
+        self.assertEqual(config['sniffer'], source['sniffer'])
+        self.assertEqual(config['hosts'], source['hosts'])
+        self.assertTrue(config['ipv6'])
+        self.assertEqual(config['tun'], {k: v for k, v in source['tun'].items() if k != 'device'})
+        self.assertEqual(config['rules'], [rule.replace('青云出口', '主备切换') for rule in source['rules']])
+        self.assertEqual(len(config['proxies']), 2)
+        self.assertEqual(len(config['proxy-groups']), 3)
+        self.assertNotIn('rule-providers', config)
+        self.assertNotIn('secret', config)
+        self.assertNotIn('青云出口', response.json()['yaml'])
+        self.assertEqual((self.root / 'profiles/a.yaml').read_bytes(), original)
+
+    def test_qingyunti_policy_rewrites_dns_outlets_and_keeps_referenced_rule_providers(self):
+        source = self.qingyunti_source()
+        source['dns']['nameserver'] = ['https://dns.example.invalid/dns-query#青云出口']
+        source['rule-providers'] = {'custom': {'type': 'http', 'behavior': 'classical',
+            'url': 'https://example.invalid/rules.yaml', 'path': './rules/custom.yaml', 'proxy': '青云出口'}}
+        source['rules'].insert(0, 'RULE-SET,custom,日本 01')
+        self.write('profiles/a.yaml', source)
+        self.request['policy'] = 'qingyunti'
+        response = self.client.post('/api/failover/export', json=self.request)
+        self.assertEqual(response.status_code, 200, response.text)
+        config = self.yaml.load(response.json()['yaml'])
+        self.assertEqual(config['rules'][0], 'RULE-SET,custom,主备切换')
+        self.assertEqual(config['dns']['nameserver'], ['https://dns.example.invalid/dns-query#主备切换'])
+        self.assertEqual(config['rule-providers']['custom']['proxy'], '主备切换')
+
+    def test_qingyunti_policy_rejects_missing_policy_unknown_targets_and_local_providers(self):
+        self.request['policy'] = 'qingyunti'
+        self.assertEqual(self.client.post('/api/failover/export', json=self.request).status_code, 400)
+        for changes in ({'rules': ['MATCH,missing']}, {'sub-rules': {'nested': ['MATCH,DIRECT']}},
+                        {'rule-providers': {'local': {'type': 'file', 'path': './local.yaml'}}}):
+            source = self.qingyunti_source()
+            source.update(changes)
+            self.write('profiles/a.yaml', source)
+            response = self.client.post('/api/failover/export', json=self.request)
+            self.assertEqual(response.status_code, 400, response.text)
+        self.request['policy'] = 'unknown'
+        self.assertEqual(self.client.post('/api/failover/export', json=self.request).status_code, 422)
+        self.assertFalse((self.root / 'exports').exists())
+
+    def test_qingyunti_policy_merges_backup_hosts_and_rejects_conflicts_with_primary_policy(self):
+        source = self.qingyunti_source()
+        backup = self.yaml.load((self.root / 'profiles/b.yaml').read_text(encoding='utf-8'))
+        backup['hosts'] = {'example.invalid': '192.0.2.2'}
+        self.write('profiles/b.yaml', backup)
+        self.request['policy'] = 'qingyunti'
+        response = self.client.post('/api/failover/export', json=self.request)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.yaml.load(response.json()['yaml'])['hosts'],
+                         {**source['hosts'], **backup['hosts']})
+        source['hosts']['example.invalid'] = '192.0.2.3'
+        source['proxies'][0]['server'] = 'primary.example.invalid'
+        self.write('profiles/a.yaml', source)
+        self.assertEqual(self.client.post('/api/failover/export', json=self.request).status_code, 400)
+
     def test_second_backup_is_optional_and_keeps_priority_order(self):
         original = self.yaml.load((self.root / 'profiles/b.yaml').read_text(encoding='utf-8'))
         original['proxies'].append({**original['proxies'][0], 'name': '日本 02'})

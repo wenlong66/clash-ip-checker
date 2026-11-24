@@ -14,10 +14,12 @@ from ruamel.yaml import YAML, YAMLError
 from routers.failover import export_target
 from utils.exports import save_export
 from utils.shadowrocket import shadowrocket_subscription
+from utils.shadowrocket_rules import shadowrocket_rules_config
 from utils.network import import_url, require_download, require_local
 
 router = APIRouter(prefix="/api/qingyunti")
 export_lock = Lock()
+GEOSITE_PATH = Path(r"D:\Program Files (x86)\青云梯-极速版\data\flutter_assets\assets\data\GeoSite.dat")
 
 
 @router.post("/export", dependencies=[Depends(require_local)])
@@ -92,11 +94,21 @@ def download_qingyunti(token: str):
 
 @router.get("/download/{token}/shadowrocket.txt", dependencies=[Depends(require_local)])
 def download_shadowrocket(token: str):
+    return shadowrocket_download(token, rules_only=False)
+
+
+@router.get("/download/{token}/shadowrocket-rules.conf", dependencies=[Depends(require_local)])
+def download_shadowrocket_rules(token: str):
+    return shadowrocket_download(token, rules_only=True)
+
+
+def shadowrocket_download(token, rules_only):
     if not re.fullmatch(r"[0-9a-f]{32}", token):
         raise HTTPException(status_code=404, detail="导出不存在，请重新提取")
     try:
         source = (Path("private_exports") / f"qingyunti_{token}.yaml").read_text(encoding="utf-8")
-        content = shadowrocket_subscription(YAML(typ="safe").load(source))
+        config = YAML(typ="safe").load(source)
+        content = shadowrocket_rules_config(config, GEOSITE_PATH) if rules_only else shadowrocket_subscription(config)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="导出不存在，请重新提取") from None
     except OSError:
@@ -105,7 +117,8 @@ def download_shadowrocket(token: str):
         raise HTTPException(status_code=400, detail="导出文件格式无效，请重新提取") from None
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from None
+    filename = "qingyunti-shadowrocket-rules.conf" if rules_only else "qingyunti-shadowrocket.txt"
     return Response(content, media_type="text/plain", headers={
         "Cache-Control": "no-store",
-        "Content-Disposition": 'attachment; filename="qingyunti-shadowrocket.txt"',
+        "Content-Disposition": f'attachment; filename="{filename}"',
     })

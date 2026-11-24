@@ -6,9 +6,22 @@
 
 在本仓库运行 `python web.py`，打开 [梯子导出](http://127.0.0.1:18080/qingyunti)，点击「提取并预览」，成功后可下载或直接导入 Clash。网页服务需与梯子客户端运行在同一台 Windows 电脑上，提取和更新操作仅允许本机访问；新建导入地址自动使用本机局域网 IPv4，局域网设备持完整地址可下载订阅。提取结果保存在本机 `private_exports` 目录，包含节点凭据，请勿分享。新建配置使用独立地址；选择「更新已有」再提取时复用原地址，随后在导出预览点击「更新订阅」，无需再到 Clash 操作或重新导入。再次提取或重启服务不会使已保存的地址失效，下载和更新时需保持服务运行。旧版临时链接升级后需重新导入一次。
 
-## 保存到服务器 VPN 后台供 Shadowrocket 使用
+## 独立使用 Clash / Shadowrocket
 
-提取并预览后点击「下载 Shadowrocket」，保存 `qingyunti-shadowrocket.txt`。
+Clash 导出完整 YAML，保留源节点、DNS、嗅探、规则及可迁移的 TUN 设置。移除 API、监听地址、DNS 监听端口和客户端专属 TUN 设备/文件描述符，不再强制替换源 `proxy-server-nameserver`；节点实际 IP 仍写入 `hosts` 并开启 hosts 查询。导入后检查 Clash 的 TUN 开关、全局覆写和扩展脚本，避免它们改变最终配置，不要与青云梯同时接管系统代理/TUN。旧配置需重新提取。
+
+Shadowrocket 分别提供两份文件：
+
+- **节点订阅 `.txt`**：`qingyunti-shadowrocket.txt`，可上传服务器 VPN 后台更新节点。保留实际服务器 IP、UUID、TLS/SNI、Vision flow、证书校验和 UDP 参数，不携带 DNS 或分流规则，单独更新 TXT 不改变现有配置。多个服务器 IP 使用首个地址。
+- **DNS 与分流 `.conf`**：`qingyunti-shadowrocket-rules.conf`，仅包含 `[General]`、`[Rule]`、`[Host]`，不包含节点定义或节点凭据。源代理出口统一映射为内置 `PROXY`（当前选中节点），保留直连/拦截，不复制自动选择或故障转移组。
+
+**需要分别导入**：先用 TXT 导入/更新节点并选中一个可用节点，再在小火箭「配置」页导入并启用 CONF，将全局路由设为「配置」。启用新配置会切换当前 DNS 与分流，不自动合并旧规则；请先保留原配置，出现问题可切回。只想更新节点时无需导入 CONF。
+
+生成 CONF 时会从 `D:\Program Files (x86)\青云梯-极速版\data\flutter_assets\assets\data\GeoSite.dat` 展开 GeoSite 规则；安装目录不同时需修改 `routers/qingyunti.py` 中的 `GEOSITE_PATH`。数据库缺失或遇到不支持的规则/DNS 策略时会报错，不静默丢弃。生成的文件已内嵌规则，日常连接不依赖原客户端、GeoSite 文件或网页服务。
+
+跨内核转换不能保证完全等价：GeoSite 域名正则近似转为 HTTP/HTTPS `URL-REGEX`，受小火箭 URL 识别能力限制，其他协议不能等价匹配；DNS 引导、Fake-IP 地址段、嗅探、规则优先级和 GeoIP 数据库版本由小火箭处理；多个 Host IP 只保留首个。差异也写在文件头，不自动开启 MITM。CONF 虽无节点凭据，仍可能包含私有 DNS 地址和 Host 映射，请勿公开。节点、IP 或源策略变化后重新提取并导入对应文件。
+
+主备切换页面新增「现有策略 / 青云梯策略」。青云梯策略使用主用订阅的完整连接设置和分流顺序，把代理出口统一替换为所选主备节点，不混入 Loyalsoldier 规则或备用订阅的策略。先把完整青云梯 YAML 导入 Clash，再将它作为主用订阅；源配置和节点变化后重新生成并更新主备配置。
 
 脚本也支持省略 PID 自动识别唯一的 ApexCore；`--stdout` 仅将 YAML 写到标准输出，不保存文件。下面保留手动指定 PID 的命令行流程。
 
@@ -62,8 +75,8 @@ if ($apexProcesses.Count -ne 1) { throw '存在多个 ApexCore，请先核实目
 
 脚本自动完成以下整理：
 
-- 删除青云梯运行时使用的控制地址、API 密钥、监听端口、TUN 和网卡绑定字段，让 Clash Verge 使用自己的设置。
-- 将 `dns.proxy-server-nameserver` 改为 `[system]`，并将 Apex 已建立节点连接的实际 IP 写入 `hosts`，避免节点域名解析失败；保留其余 DNS 设置、节点、节点组和分流规则。
+- 删除青云梯运行时使用的控制地址、API 密钥、监听端口和网卡绑定字段；TUN 保留启用状态、协议栈、路由及 DNS 劫持等可迁移设置，移除专属设备名及文件描述符，Clash Verge 的开关和覆写仍可能影响实际运行。
+- 保留源 DNS（移除其本地 `listen`），并将 Apex 已建立节点连接的实际 IP 写入配置的 `hosts`、开启 hosts 查询，避免节点域名解析失败；保留节点、节点组、嗅探和分流规则。
 - 地址映射是静态快照，服务商更换服务器 IP 后需要重新连接 Apex 并提取；不修改 Windows hosts 或系统 DNS。
 - 不输出完整节点内容、UUID、订阅令牌或密码。
 

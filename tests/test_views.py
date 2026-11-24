@@ -27,6 +27,10 @@ class PageTests(unittest.TestCase):
         self.assertIn('id="failover-heading"', failover.text)
         self.assertNotIn('id="yaml-editor"', failover.text)
         self.assertIn('Loyalsoldier 白名单规则', failover.text)
+        self.assertIn('id="failover-policy" x-model="failover.policy"', failover.text)
+        self.assertIn('aria-describedby="failover-policy-help"', failover.text)
+        self.assertIn('<option value="qingyunti">青云梯策略</option>', failover.text)
+        self.assertIn('<option value="loyalsoldier">现有策略', failover.text)
         self.assertIn('href="/" aria-current="page"', checker.text)
         self.assertIn('href="/failover" aria-current="page"', failover.text)
         for page in (checker, failover):

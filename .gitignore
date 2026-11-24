@@ -9,6 +9,7 @@ __pycache__/
 *_checked.yaml
 run.log
 *.map
+private_exports/
 
 # VS Code
 .vscode/

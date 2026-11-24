@@ -30,11 +30,21 @@ class ShadowrocketTests(unittest.TestCase):
         secure = {**self.node, 'server': '192.0.2.3', 'skip-cert-verify': False, 'flow': ''}
         self.assertNotIn('allowInsecure', shadowrocket_subscription({'proxies': [secure]}))
 
+    def test_subscription_preserves_udp_without_exporting_dns_or_rules(self):
+        for enabled in (True, False):
+            config = {**self.config, 'proxies': [{**self.node, 'udp': enabled}],
+                      'dns': {'nameserver': ['https://dns.example.invalid/dns-query']}}
+            text = shadowrocket_subscription(config)
+            self.assertEqual(parse_qs(urlsplit(text.strip()).query)['udp'], ['1' if enabled else '0'])
+            self.assertNotIn('dns.example.invalid', text)
+            self.assertNotIn('[General]', text)
+            self.assertNotIn('MATCH', text)
+
     def test_rejects_unsupported_and_incomplete_nodes_without_exposing_credentials(self):
         for changed in ({'type': 'trojan'}, {'tls': False}, {'network': 'ws'}, {'port': 0}, {'port': True},
                         {'uuid': 'secret-uuid'}, {'flow': 'unknown'}, {'name': 'bad\nname'},
                         {'servername': 'bad?domain'}, {'reality-opts': {'public-key': 'secret'}},
-                        {'dialer-proxy': 'upstream'}, {'skip-cert-verify': 'true'}):
+                        {'dialer-proxy': 'upstream'}, {'skip-cert-verify': 'true'}, {'udp': 'true'}):
             with self.assertRaises(ValueError) as error:
                 shadowrocket_subscription({**self.config, 'proxies': [{**self.node, **changed}]})
             self.assertNotIn('secret', str(error.exception))

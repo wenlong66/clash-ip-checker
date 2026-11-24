@@ -13,6 +13,7 @@ from ruamel.yaml import YAML, YAMLError
 
 from schemas import ExportKind, FailoverRequest, SubscriptionRefreshRequest
 from utils.clash_refresh import refresh_subscription
+from utils.clash_config import qingyunti_failover_policy
 from utils.exports import save_export
 from utils.network import import_url, local_hosts, require_local
 
@@ -174,6 +175,7 @@ def export_failover(request: FailoverRequest, http_request: Request):
             raise HTTPException(status_code=400, detail="只能更新本网页生成且导出文件仍存在的主备配置，请刷新订阅列表")
     proxies = []
     hosts = {}
+    policy_source = None
     for role, selection in zip(("主用", "备用", "第二备用"), selections):
         profile = next((item for item in profiles if item.get("uid") == selection.profile_id), None)
         if profile is None:
@@ -183,6 +185,8 @@ def export_failover(request: FailoverRequest, http_request: Request):
             nodes = profile_nodes(source)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=f"{role}订阅：{error}") from error
+        if role == "主用":
+            policy_source = source
         node = next((node for node in nodes if node["name"] == selection.node_name), None)
         if node is None:
             raise HTTPException(status_code=400, detail=f"{role}节点已变化，请刷新订阅列表后重新选择")
@@ -251,7 +255,13 @@ def export_failover(request: FailoverRequest, http_request: Request):
             "MATCH,主备切换",
         ],
     }
-    if hosts:
+    if request.policy == "qingyunti":
+        try:
+            policy = qingyunti_failover_policy(policy_source, hosts)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from None
+        config = {**policy, "proxies": proxies, "proxy-groups": config["proxy-groups"]}
+    elif hosts:
         config = {**config, "hosts": hosts,
                   "dns": {"enable": True, "use-hosts": True, "nameserver": ["system"]}}
     stream = io.StringIO()

@@ -4,7 +4,8 @@ import subprocess
 import json
 
 import extract as exporter
-from extract import RUNTIME_FIELDS, find_pid, main, parse_config, portable_config
+from extract import find_pid, main, parse_config, portable_config
+from utils.clash_config import RUNTIME_FIELDS
 
 
 class ExportTests(unittest.TestCase):
@@ -56,7 +57,7 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(result["hosts"], {"other.example.invalid": "192.0.2.9", "nodes.example.invalid": ["192.0.2.1"]})
         self.assertEqual(result["proxies"], proxies)
         self.assertEqual(config["hosts"], {"other.example.invalid": "192.0.2.9"})
-        self.assertEqual(result["dns"]["proxy-server-nameserver"], ["system"])
+        self.assertEqual(result["dns"]["proxy-server-nameserver"], config["dns"]["proxy-server-nameserver"])
         self.assertIn('1234', run.call_args.args[0][-1])
         self.assertEqual(run.call_args.kwargs['timeout'], 15)
         self.assertTrue(run.call_args.kwargs['check'])
@@ -76,6 +77,25 @@ class ExportTests(unittest.TestCase):
         with patch('extract.subprocess.run', return_value=subprocess.CompletedProcess([], 0, '[]')):
             self.assertEqual(exporter.active_server_hosts(1234, [{"server": "2001:db8::1", "port": 10001}]), {})
 
+    def test_preserves_portable_tun_dns_and_sniffer_without_client_bindings(self):
+        config = {'tun': {'enable': True, 'device': 'apex-tun', 'file-descriptor': 123,
+                          'stack': 'mixed', 'auto-route': True, 'dns-hijack': ['any:53']},
+                  'dns': {'enable': True, 'listen': '127.0.0.1:1053', 'enhanced-mode': 'fake-ip',
+                          'nameserver': ['https://doh.pub/dns-query'],
+                          'proxy-server-nameserver': ['https://223.5.5.5/dns-query']},
+                  'sniffer': {'enable': True, 'sniff': {'TLS': {'ports': [443]}}},
+                  'ipv6': True}
+        result = portable_config(config, {'node.example.com': ['192.0.2.1']})
+        self.assertEqual(result['tun'], {'enable': True, 'stack': 'mixed', 'auto-route': True,
+                                         'dns-hijack': ['any:53']})
+        self.assertNotIn('listen', result['dns'])
+        self.assertTrue(result['dns']['use-hosts'])
+        self.assertEqual(result['dns']['nameserver'], config['dns']['nameserver'])
+        self.assertEqual(result['sniffer'], config['sniffer'])
+        self.assertTrue(result['ipv6'])
+        self.assertIn('device', config['tun'])
+        self.assertIn('listen', config['dns'])
+
     def test_removes_runtime_fields_and_preserves_nodes_and_rules(self):
         config = {key: "runtime value" for key in RUNTIME_FIELDS}
         config.update({"dns": {"proxy-server-nameserver": ["https://example.com/dns-query"]},
@@ -83,7 +103,7 @@ class ExportTests(unittest.TestCase):
                        "rules": ["MATCH,DIRECT"]})
         result = portable_config(config)
         self.assertTrue(all(key not in result for key in RUNTIME_FIELDS))
-        self.assertEqual(result["dns"]["proxy-server-nameserver"], ["system"])
+        self.assertEqual(result["dns"]["proxy-server-nameserver"], config["dns"]["proxy-server-nameserver"])
         self.assertEqual(result["proxies"], config["proxies"])
         self.assertEqual(result["rules"], config["rules"])
         self.assertIn("secret", config)

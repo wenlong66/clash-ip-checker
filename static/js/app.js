@@ -107,6 +107,7 @@ function app() {
             backup: { profile_id: '', node_name: '' },
             backup2: { profile_id: '', node_name: '' },
             interval: 30,
+            policy: 'loyalsoldier',
             name: '主备切换',
             target_profile_id: '',
             loading: false,
@@ -434,6 +435,7 @@ function app() {
                     }
                     if (typeof saved.name === 'string') this.failover.name = saved.name;
                     if ([30, 60, 300].includes(saved.interval)) this.failover.interval = saved.interval;
+                    if (['loyalsoldier', 'qingyunti'].includes(saved.policy)) this.failover.policy = saved.policy;
                     if (typeof saved.target_profile_id === 'string') {
                         this.failover.target_profile_id = saved.target_profile_id;
                         this.failoverSettingsRestored = true;
@@ -445,10 +447,10 @@ function app() {
         },
 
         saveFailoverSettings() {
-            const { primary, backup, backup2, interval, name, target_profile_id } = this.failover;
+            const { primary, backup, backup2, interval, policy, name, target_profile_id } = this.failover;
             try {
                 localStorage.setItem('clash-ip-checker.failover.v1', JSON.stringify({
-                    primary, backup, backup2, interval, name, target_profile_id
+                    primary, backup, backup2, interval, policy, name, target_profile_id
                 }));
             } catch {}
         },
@@ -515,6 +517,7 @@ function app() {
                         backup: this.failover.backup,
                         backup2: this.failover.backup2.node_name ? this.failover.backup2 : null,
                         interval: Number(this.failover.interval),
+                        policy: this.failover.policy,
                         target_profile_id: this.failover.target_profile_id
                     })
                 });
@@ -640,11 +643,13 @@ function app() {
             URL.revokeObjectURL(url);
         },
 
-        async downloadShadowrocket() {
-            if (this.exportKind !== 'qingyunti' || !this.exportUrl || this.isExporting) return;
+        async downloadShadowrocket(kind = 'nodes') {
+            if (this.exportKind !== 'qingyunti' || !this.exportUrl || this.isExporting
+                || !['nodes', 'rules'].includes(kind)) return;
+            const filename = kind === 'rules' ? 'shadowrocket-rules.conf' : 'shadowrocket.txt';
             this.isExporting = true;
             try {
-                const response = await fetch(`${this.exportUrl}/shadowrocket.txt`);
+                const response = await fetch(`${this.exportUrl}/${filename}`);
                 if (!response.ok) {
                     const data = await response.json();
                     throw new Error(data.detail || 'Shadowrocket 导出失败');
@@ -652,7 +657,7 @@ function app() {
                 const url = URL.createObjectURL(await response.blob());
                 const link = document.createElement('a');
                 link.href = url;
-                link.download = 'qingyunti-shadowrocket.txt';
+                link.download = `qingyunti-${filename}`;
                 link.click();
                 URL.revokeObjectURL(url);
             } catch (error) {

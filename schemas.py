@@ -37,4 +37,5 @@ class FailoverRequest(BaseModel):
     backup: FailoverNode
     backup2: Optional[FailoverNode] = None
     interval: int = Field(default=30, ge=10, le=3600)
+    policy: Literal['loyalsoldier', 'qingyunti'] = 'loyalsoldier'
     target_profile_id: str = ''

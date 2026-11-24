@@ -39,5 +39,9 @@ def shadowrocket_uri(node, hosts):
         query = {**query, 'flow': flow}
     if node.get('skip-cert-verify'):
         query = {**query, 'allowInsecure': '1'}
+    if 'udp' in node:
+        if type(node['udp']) is not bool:
+            raise ValueError('节点 UDP 参数格式错误，请重新提取')
+        query['udp'] = '1' if node['udp'] else '0'
     address = f'[{address}]' if ':' in address else address
     return f'vless://{credential}@{address}:{port}?{urlencode(query)}#{quote(name, safe="")}'
