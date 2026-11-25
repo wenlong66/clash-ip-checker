@@ -63,11 +63,14 @@ class QingyuntiTests(unittest.TestCase):
         for stderr, message in [('未找到 ApexCore', '未找到 ApexCore'),
                                 ('多个 ApexCore', '多个 ApexCore'),
                                 ('PermissionError: WinError 5', '权限'),
-                                ('PID does not belong', '安装路径'),
+                                ('PID does not belong', 'utils/qingyunti_geodata.py'),
                                 ('未找到节点服务器的活动连接', '连接一个节点'),
                                 ('CalledProcessError: Get-NetTCPConnection', '连接一个节点'),
                                 ('无法唯一匹配 Apex 活动节点地址', '唯一匹配'),
                                 ("No module named 'yaml'", '依赖缺失'),
+                                ('无法确认青云梯运行内核的数据目录', '数据库'),
+                                ('无法完整读取青云梯 GeoIP 数据库', '数据库'),
+                                ('GeoSite 数据库缺少所需分类', '数据库'),
                                 ('unrelated sensitive output', '未能提取完整配置')]:
             self.run.return_value = subprocess.CompletedProcess([], 1, '', stderr)
             response = self.client.post('/api/qingyunti/export')
@@ -125,7 +128,7 @@ class QingyuntiTests(unittest.TestCase):
         url = exported['url'] + '/shadowrocket-rules.conf'
         database = Path('GeoSite.dat')
         database.write_bytes(geosite_fixture())
-        with patch.object(qingyunti, 'GEOSITE_PATH', database):
+        with patch.object(qingyunti, 'runtime_data_directory', return_value=database.parent):
             response = self.client.get(url)
             self.assertEqual(response.status_code, 200, response.text)
             self.assertIn('[General]', response.text)

@@ -91,7 +91,7 @@
             </div>
             {{ export_target('qingyunti') }}
             <p>先在本机打开梯子客户端，登录、连接节点并打开网页，再点击「提取并预览」。Clash 可下载完整 YAML；Shadowrocket 分别下载节点订阅 .txt 和 DNS 与分流 .conf，导入后连接无需原客户端中转。</p>
-            <p>Clash 导出保留青云梯的节点参数、DNS、嗅探、分流和可迁移的 TUN 设置。启用后检查 Clash 的 TUN 开关和全局覆写，避免再次改写这些设置；不要让两个客户端同时接管系统代理或 TUN。</p>
+            <p>Clash 导出保留青云梯的节点参数、DNS、嗅探、分流和可迁移的 TUN 设置，并内嵌当前 GeoSite／GeoIP 分类，不依赖或替换 Clash 的共享数据库。启用后检查 Clash 的 TUN 开关和全局覆写，避免再次改写这些设置；不要让两个客户端同时接管系统代理或 TUN。</p>
             <p>Shadowrocket 分两步导入：① 用「节点订阅 .txt」导入或更新节点，在首页选中可用节点；② 在小火箭的「配置」页导入「DNS 与分流 .conf」，启用后使用「配置」路由。第二份文件不包含节点或节点凭据，代理规则使用当前选中节点，不复制青云梯的自动选组。</p>
             <p>仅更新 TXT 不影响现有 DNS 和分流；启用 DNS 与分流文件会切换当前策略，不会自动合并旧规则，请保留原配置以便切回。GeoSite 在导出时从安装目录的数据库展开，生成后无需原客户端或网页服务运行。跨内核的 DNS、规则优先级及域名正则不能完全等价，详见文件头部提示。</p>
             <p>网页服务和梯子客户端需运行在同一台 Windows 电脑上；本机操作可使用 localhost、127.0.0.1 或本机局域网 IP，导入地址统一使用本机局域网 IP。提取不会切换当前节点。</p>
@@ -184,7 +184,7 @@
                 </div>
                 <div id="failover-policy-help" class="failover-note">
                     <p x-show="failover.policy === 'loyalsoldier'">现有策略：使用 <a href="https://github.com/Loyalsoldier/clash-rules#白名单模式-rules-配置方式推荐" target="_blank" rel="noopener noreferrer">Loyalsoldier 白名单规则</a>，广告拦截、国内直连，其余流量走主备；规则集每 24 小时更新。</p>
-                    <p x-show="failover.policy === 'qingyunti'" x-cloak>青云梯策略：请将「梯子导出」的完整 Clash 配置作为主用订阅。继承其 DNS、嗅探、IPv6、可迁移的 TUN 设置和规则顺序，直连/拦截不变，代理出口改为所选主备节点；备用可来自其他订阅，不混用备用订阅的分流规则。</p>
+                    <p x-show="failover.policy === 'qingyunti'" x-cloak>青云梯策略：请将「梯子导出」的完整 Clash 配置作为主用订阅。继承其 DNS、嗅探、IPv6、可迁移的 TUN 设置和规则顺序，内嵌青云梯 GeoSite／GeoIP 分类，不影响现有策略的数据库；直连/拦截不变，代理出口改为所选主备节点；备用可来自其他订阅，不混用备用订阅的分流规则。</p>
                     <p>两种策略均按主用 → 第一备用 → 第二备用切换，主用恢复后优先切回。节点和青云梯策略为当前快照，源订阅更新后需重新生成；Clash 全局覆写仍可能影响最终配置。</p>
                 </div>
                 <details class="failover-note" x-show="failover.profiles.some(profile => profile.error)">

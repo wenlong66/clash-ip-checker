@@ -58,6 +58,31 @@ class ShadowrocketRulesTests(unittest.TestCase):
         self.assertLess(text.index('DOMAIN-SUFFIX,example.cn,DIRECT'), text.index('FINAL,PROXY'))
         self.assertEqual(self.config, original)
 
+    def test_frozen_geodata_remains_usable_without_the_original_database(self):
+        from utils.qingyunti_geodata import qingyunti_geodata
+        pinned = qingyunti_geodata(self.config, self.database.parent)
+        self.database.unlink()
+        text = shadowrocket_rules_config(pinned, self.database)
+        self.assertIn('DOMAIN-SUFFIX,example.cn,DIRECT', text)
+        self.assertIn('URL-REGEX,', text)
+        self.assertIn('FINAL,PROXY', text)
+        self.assertNotIn('RULE-SET,', text)
+        self.assertNotIn('never-export-this', text)
+
+    def test_invalid_inline_networks_are_not_exported_as_valid_rules(self):
+        for value in ('not-a-network', '192.0.2.0/24,REJECT'):
+            source = {**self.config, 'rules': ['RULE-SET,local,DIRECT'], 'rule-providers': {
+                'local': {'type': 'inline', 'behavior': 'ipcidr', 'payload': [value]}}}
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                shadowrocket_rules_config(source, None)
+
+    def test_comma_quantifier_is_rejected_instead_of_silently_rewritten(self):
+        source = {**self.config, 'rules': ['RULE-SET,local,DIRECT'], 'rule-providers': {
+            'local': {'type': 'inline', 'behavior': 'classical',
+                      'payload': [r'DOMAIN-REGEX,^a{1,3}\.example\.invalid$']}}}
+        with self.assertRaises(ValueError):
+            shadowrocket_rules_config(source, None)
+
     def test_dns_fallback_does_not_add_system_resolver_and_explicit_fallback_is_kept(self):
         self.config['rules'] = ['MATCH,青云出口']
         text = shadowrocket_rules_config(self.config, None)

@@ -1,5 +1,5 @@
 """Export DNS and routing separately from Shadowrocket node subscriptions."""
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 import re
 
 from utils.geosite import geosite_domains
@@ -53,10 +53,32 @@ def shadowrocket_rules_config(config, geosite_path):
     source_rules = config.get('rules')
     if not isinstance(source_rules, list) or not source_rules or config.get('sub-rules'):
         raise ValueError('缺少完整分流规则或包含暂不支持的子规则，请重新提取')
-    supported = {'DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-WILDCARD', 'IP-CIDR',
+    expanded = []
+    for rule in source_rules:
+        if not isinstance(rule, str) or not rule.startswith('RULE-SET,'):
+            expanded.append(rule)
+            continue
+        parts = rule.split(',')
+        if len(parts) not in (3, 4) or len(parts) == 4 and parts[3] != 'no-resolve':
+            raise ValueError('内嵌规则集的选项暂不支持小火箭转换')
+        provider = (config.get('rule-providers') or {}).get(parts[1])
+        if (not isinstance(provider, dict) or provider.get('type') != 'inline'
+                or provider.get('behavior') not in ('classical', 'ipcidr')
+                or not isinstance(provider.get('payload'), list)):
+            raise ValueError('小火箭仅支持转换已内嵌的规则集，请重新提取配置')
+        suffix = ',' + ','.join(parts[2:])
+        for entry in provider['payload']:
+            entry = config_value(entry, '\r\n')
+            if provider['behavior'] == 'ipcidr':
+                try:
+                    entry = 'IP-CIDR,' + str(ip_network(entry, strict=False))
+                except ValueError:
+                    raise ValueError('内嵌 IP 规则集含无效网段，不能完整导出') from None
+            expanded.append(entry + suffix)
+    supported = {'DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-WILDCARD', 'DOMAIN-REGEX', 'IP-CIDR',
                  'IP-CIDR6', 'GEOIP', 'IP-ASN', 'DST-PORT', 'NETWORK', 'AND', 'OR', 'NOT', 'MATCH', 'GEOSITE'}
     parsed = []
-    for rule in source_rules:
+    for rule in expanded:
         prefix, separator, target = config_value(rule, '\r\n').rpartition(',')
         suffix = ''
         if target == 'no-resolve':
@@ -78,9 +100,12 @@ def shadowrocket_rules_config(config, geosite_path):
     rules = []
     regex_count = 0
     for kind, prefix, target, suffix in parsed:
-        if kind == 'GEOSITE':
-            for domain_type, value in domains[prefix.split(',', 1)[1]]:
+        if kind in ('GEOSITE', 'DOMAIN-REGEX'):
+            entries = domains[prefix.split(',', 1)[1]] if kind == 'GEOSITE' else [(1, prefix.split(',', 1)[1])]
+            for domain_type, value in entries:
                 if domain_type == 1:
+                    if re.search(r'\{\d+,\d*\}', value):
+                        raise ValueError('此域名正则包含不能安全转换的小火箭量词，不能完整导出')
                     # Shadowrocket has URL-REGEX, not an equivalent DOMAIN-REGEX rule.
                     expression = value.removeprefix('^').removesuffix('$').replace(',', r'\x2c')
                     if expression.startswith(r'(^|\.)'):

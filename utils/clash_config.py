@@ -1,5 +1,6 @@
 """Keep portable connection settings without copying a client's control endpoints."""
 import copy
+from ipaddress import ip_address
 from urllib.parse import unquote
 
 
@@ -24,6 +25,52 @@ def portable_config(config, server_hosts=None):
         result["hosts"] = {**(result.get("hosts") or {}), **copy.deepcopy(server_hosts)}
         result.setdefault("dns", {}).update({"enable": True, "use-hosts": True})
     return result
+
+
+def qingyunti_backup_dns(config, backups, primary_server):
+    dns = config['dns']
+    policies = dns.get('proxy-server-nameserver-policy', {})
+    if not isinstance(policies, dict):
+        raise ValueError('主用订阅的节点 DNS 策略格式错误')
+    overrides = {}
+    for server, source in backups:
+        try:
+            ip_address(server)
+            continue
+        except ValueError:
+            pass
+        server = server.rstrip('.').lower()
+        hostnames = {name.rstrip('.').lower() for name in config.get('hosts', {})}
+        if dns.get('use-hosts') is not False and server in hostnames:
+            continue
+        source_dns = source.get('dns', {})
+        if not isinstance(source_dns, dict):
+            raise ValueError('备用订阅的 DNS 格式错误')
+        dedicated = source_dns.get('proxy-server-nameserver')
+        if (source_dns.get('proxy-server-nameserver-policy')
+                or not dedicated and source_dns.get('nameserver-policy')):
+            raise ValueError('备用订阅包含独立 DNS 分流，暂不能完整继承，请使用独立节点解析配置')
+        nameservers = dedicated or source_dns.get('nameserver') or ['system']
+        if source_dns.get('enable') is False:
+            nameservers = ['system']
+        if (not isinstance(nameservers, list)
+                or any(not isinstance(value, str) or not value.strip() for value in nameservers)):
+            raise ValueError('备用订阅的节点 DNS 服务器格式错误')
+        outlets = {item['name'] for key in ('proxies', 'proxy-groups')
+                   for item in source.get(key, []) if isinstance(item, dict) and 'name' in item}
+        if any(unquote(value.partition('#')[2].split('&')[0]) in outlets for value in nameservers):
+            raise ValueError('备用节点 DNS 依赖原订阅的代理出口，不能独立解析')
+        if server == primary_server.rstrip('.').lower():
+            primary_dns = policies.get(server, dns.get('proxy-server-nameserver')
+                                       or dns.get('nameserver') or ['system'])
+            if nameservers != primary_dns:
+                raise ValueError('主备共用服务器域名但 DNS 不同，无法独立解析，请换一个备用节点')
+            continue
+        if server in overrides and overrides[server] != nameservers:
+            raise ValueError('备用节点共用服务器域名但 DNS 不同，请换一个备用节点')
+        overrides = {**overrides, server: copy.deepcopy(nameservers)}
+    return {**copy.deepcopy(dns), 'proxy-server-nameserver-policy': {
+        **copy.deepcopy(policies), **overrides}} if overrides else copy.deepcopy(dns)
 
 
 def qingyunti_failover_policy(source, hosts):
@@ -68,8 +115,11 @@ def qingyunti_failover_policy(source, hosts):
         return value
 
     config["dns"] = dns_outlets(config["dns"])
-    for provider in config.get("rule-providers", {}).values():
-        if not isinstance(provider, dict) or provider.get("type") != "http":
+    providers = config.get("rule-providers", {})
+    if not isinstance(providers, dict):
+        raise ValueError("主用订阅的规则集格式错误")
+    for provider in providers.values():
+        if not isinstance(provider, dict) or provider.get("type") not in ("http", "inline"):
             raise ValueError("青云梯策略不支持依赖本地文件的规则集，请使用完整原始导出配置")
         if provider.get("proxy") in outlets:
             provider["proxy"] = "主备切换"

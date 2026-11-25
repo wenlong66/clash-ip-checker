@@ -13,7 +13,8 @@ from ruamel.yaml import YAML, YAMLError
 
 from schemas import ExportKind, FailoverRequest, SubscriptionRefreshRequest
 from utils.clash_refresh import refresh_subscription
-from utils.clash_config import qingyunti_failover_policy
+from utils.clash_config import qingyunti_backup_dns, qingyunti_failover_policy
+from utils.qingyunti_geodata import qingyunti_geodata
 from utils.exports import save_export
 from utils.network import import_url, local_hosts, require_local
 
@@ -176,6 +177,7 @@ def export_failover(request: FailoverRequest, http_request: Request):
     proxies = []
     hosts = {}
     policy_source = None
+    backup_sources = []
     for role, selection in zip(("主用", "备用", "第二备用"), selections):
         profile = next((item for item in profiles if item.get("uid") == selection.profile_id), None)
         if profile is None:
@@ -193,6 +195,8 @@ def export_failover(request: FailoverRequest, http_request: Request):
         if node.get("dialer-proxy"):
             raise HTTPException(status_code=400, detail=f"{role}节点依赖链式代理，请选择独立节点")
         server = node["server"]
+        if role != "主用":
+            backup_sources = [*backup_sources, (server, source)]
         source_hosts = source.get("hosts")
         source_dns = source.get("dns")
         use_hosts = not isinstance(source_dns, dict) or source_dns.get("use-hosts") is not False
@@ -258,6 +262,8 @@ def export_failover(request: FailoverRequest, http_request: Request):
     if request.policy == "qingyunti":
         try:
             policy = qingyunti_failover_policy(policy_source, hosts)
+            policy = qingyunti_geodata({**policy, "dns": qingyunti_backup_dns(
+                policy, backup_sources, proxies[0]["server"])})
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from None
         config = {**policy, "proxies": proxies, "proxy-groups": config["proxy-groups"]}

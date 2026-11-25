@@ -21,6 +21,13 @@ class ExportTests(unittest.TestCase):
             with self.assertRaises(subprocess.TimeoutExpired):
                 find_pid()
 
+    def test_json_config_can_be_recovered_without_null_delimiters(self):
+        config = {'proxies': [{'name': 'test', 'server': 'node.example.invalid', 'type': 'vless'}],
+                  'dns': {'nameserver': ['system']}, 'rules': ['MATCH,DIRECT']}
+        raw = b'prefix bytes' + json.dumps(config).encode() + b'\xfftrailing bytes'
+        self.assertEqual(exporter.config_candidates(raw), [config])
+        self.assertEqual(exporter.config_candidates(b'not a config'), [])
+
     def test_stdout_mode_does_not_write_a_file(self):
         config = {'proxies': [{'name': 'test', 'server': 'example.com', 'type': 'vless'}]}
         with patch('extract.sys.argv', ['extract.py', '--stdout']), \

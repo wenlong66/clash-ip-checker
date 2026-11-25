@@ -16,10 +16,10 @@ from utils.exports import save_export
 from utils.shadowrocket import shadowrocket_subscription
 from utils.shadowrocket_rules import shadowrocket_rules_config
 from utils.network import import_url, require_download, require_local
+from utils.qingyunti_geodata import runtime_data_directory
 
 router = APIRouter(prefix="/api/qingyunti")
 export_lock = Lock()
-GEOSITE_PATH = Path(r"D:\Program Files (x86)\青云梯-极速版\data\flutter_assets\assets\data\GeoSite.dat")
 
 
 @router.post("/export", dependencies=[Depends(require_local)])
@@ -48,13 +48,15 @@ def export_qingyunti(http_request: Request, target_profile_id: str = ''):
             elif "WinError 5" in error or "PermissionError" in error:
                 detail = "没有读取梯子客户端的权限，请以同一 Windows 用户运行网页服务并检查进程权限"
             elif "PID does not belong" in error:
-                detail = "梯子客户端安装路径与脚本不符，请核实并更新 extract.py 中的 APEX_CORE 路径"
+                detail = "梯子客户端安装路径与脚本不符，请核实并更新 utils/qingyunti_geodata.py 中的 APEX_CORE 路径"
             elif "活动连接" in error or "Get-NetTCPConnection" in error:
                 detail = "请先在 Apex 连接一个节点并打开网页，保持连接后重新提取，以获取实际服务器地址"
             elif "活动节点地址" in error:
                 detail = "无法读取或唯一匹配 Apex 节点地址，请保持客户端连接后重试；客户端升级后可能需要适配"
             elif "No module named" in error:
                 detail = "导出依赖缺失，请安装 requirements.txt 中的依赖后重试"
+            elif any(value in error for value in ('GeoSite', 'GeoIP', 'Geo 数据库', '数据目录', '内嵌规则集')):
+                detail = "无法完整对齐青云梯规则数据库，请保持客户端运行后重新提取；缺失或不支持的 DNS／规则不会自动降级"
             else:
                 detail = "未能提取完整配置，请保持梯子客户端连接后重试；客户端升级后可能需要适配"
             raise HTTPException(status_code=400, detail=detail)
@@ -108,7 +110,13 @@ def shadowrocket_download(token, rules_only):
     try:
         source = (Path("private_exports") / f"qingyunti_{token}.yaml").read_text(encoding="utf-8")
         config = YAML(typ="safe").load(source)
-        content = shadowrocket_rules_config(config, GEOSITE_PATH) if rules_only else shadowrocket_subscription(config)
+        if rules_only:
+            rules = config.get('rules') if isinstance(config, dict) else None
+            needs_geosite = isinstance(rules, list) and any(isinstance(rule, str) and rule.startswith('GEOSITE,') for rule in rules)
+            geosite_path = runtime_data_directory() / 'GeoSite.dat' if needs_geosite else None
+            content = shadowrocket_rules_config(config, geosite_path)
+        else:
+            content = shadowrocket_subscription(config)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="导出不存在，请重新提取") from None
     except OSError:

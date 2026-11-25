@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 from ruamel.yaml import YAML
 
 from routers import failover
+from test_geosite import geosite_fixture
+from utils.qingyunti_geodata import qingyunti_geodata
 
 
 class FailoverTests(unittest.TestCase):
@@ -22,6 +24,10 @@ class FailoverTests(unittest.TestCase):
         os.chdir(self.root)
         self.addCleanup(os.chdir, previous_cwd)
         (self.root / 'profiles').mkdir()
+        (self.root / 'GeoSite.dat').write_bytes(geosite_fixture())
+        geodata_patch = patch('utils.qingyunti_geodata.runtime_data_directory', return_value=self.root)
+        geodata_patch.start()
+        self.addCleanup(geodata_patch.stop)
         network_patch = patch('utils.network.lan_ip', return_value='10.12.64.8')
         network_patch.start()
         self.addCleanup(network_patch.stop)
@@ -166,6 +172,7 @@ class FailoverTests(unittest.TestCase):
         source = self.yaml.load((self.root / 'profiles/a.yaml').read_text(encoding='utf-8'))
         source.update({
             'mode': 'global', 'ipv6': True, 'tcp-concurrent': True,
+            'proxies': [{**source['proxies'][0], 'server': 'primary.example.invalid'}],
             'tun': {'enable': True, 'device': 'apex', 'stack': 'mixed', 'dns-hijack': ['any:53']},
             'dns': {'enable': True, 'listen': '127.0.0.1:1053', 'enhanced-mode': 'fake-ip',
                     'nameserver': ['https://doh.pub/dns-query'], 'use-hosts': True,
@@ -173,7 +180,7 @@ class FailoverTests(unittest.TestCase):
             'sniffer': {'enable': True, 'sniff': {'HTTP': {'ports': [80]}, 'TLS': {'ports': [443]}}},
             'hosts': {'other.example.invalid': '192.0.2.10'},
             'proxy-groups': [{'name': '青云出口', 'type': 'select', 'proxies': ['日本 01']}],
-            'rules': ['DOMAIN-SUFFIX,cn,DIRECT', 'GEOSITE,apple@cn,DIRECT',
+            'rules': ['DOMAIN-SUFFIX,cn,DIRECT', 'GEOSITE,test@cn,DIRECT',
                       'AND,((NETWORK,UDP),(DST-PORT,443)),REJECT',
                       'IP-CIDR,203.0.113.0/24,青云出口,no-resolve', 'MATCH,青云出口'],
         })
@@ -188,18 +195,141 @@ class FailoverTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         config = self.yaml.load(response.json()['yaml'])
         self.assertEqual(config['mode'], 'rule')
-        self.assertEqual(config['dns'], {k: v for k, v in source['dns'].items() if k != 'listen'})
+        self.assertEqual(config['dns'], {
+            **{k: v for k, v in source['dns'].items() if k != 'listen'},
+            'proxy-server-nameserver-policy': {'example.invalid': ['system']}})
         self.assertEqual(config['sniffer'], source['sniffer'])
         self.assertEqual(config['hosts'], source['hosts'])
         self.assertTrue(config['ipv6'])
         self.assertEqual(config['tun'], {k: v for k, v in source['tun'].items() if k != 'device'})
-        self.assertEqual(config['rules'], [rule.replace('青云出口', '主备切换') for rule in source['rules']])
+        pinned = qingyunti_geodata(source, self.root)
+        self.assertEqual(config['rules'], [rule.replace('青云出口', '主备切换') for rule in pinned['rules']])
         self.assertEqual(len(config['proxies']), 2)
         self.assertEqual(len(config['proxy-groups']), 3)
-        self.assertNotIn('rule-providers', config)
+        self.assertEqual(config['rule-providers'], pinned['rule-providers'])
         self.assertNotIn('secret', config)
         self.assertNotIn('青云出口', response.json()['yaml'])
         self.assertEqual((self.root / 'profiles/a.yaml').read_bytes(), original)
+
+    def test_qingyunti_backup_resolvers_only_override_their_server_domains(self):
+        source = self.qingyunti_source()
+        source['dns']['proxy-server-nameserver-policy'] = {'keep.example.invalid': ['system']}
+        self.write('profiles/a.yaml', source)
+        backup = self.yaml.load((self.root / 'profiles/b.yaml').read_text(encoding='utf-8'))
+        backup = {**backup, 'proxies': [{**backup['proxies'][0], 'server': 'backup.example.invalid'}],
+                  'dns': {'enable': True, 'proxy-server-nameserver': ['https://192.0.2.53/dns-query#DIRECT'],
+                          'nameserver': ['https://192.0.2.54/dns-query']}}
+        second = {**backup, 'proxies': [{**backup['proxies'][0], 'server': 'second.example.invalid'}],
+                  'dns': {'enable': True, 'nameserver': ['https://192.0.2.55/dns-query']}}
+        self.write('profiles/b.yaml', backup)
+        self.write('profiles/c.yaml', second)
+        self.write('profiles.yaml', {'items': [*self.items,
+                   {'uid': 'c', 'type': 'local', 'name': '订阅 C', 'file': 'c.yaml'}]})
+        originals = {path: path.read_bytes() for path in (self.root / 'profiles').iterdir()}
+        self.request = {**self.request, 'policy': 'qingyunti',
+                        'backup2': {'profile_id': 'c', 'node_name': '日本 01'}}
+        response = self.client.post('/api/failover/export', json=self.request)
+        self.assertEqual(response.status_code, 200, response.text)
+        config = self.yaml.load(response.json()['yaml'])
+        self.assertEqual(config['dns'], {
+            **{key: value for key, value in source['dns'].items() if key != 'listen'},
+            'proxy-server-nameserver-policy': {
+                **source['dns']['proxy-server-nameserver-policy'],
+                'backup.example.invalid': backup['dns']['proxy-server-nameserver'],
+                'second.example.invalid': second['dns']['nameserver']}})
+        pinned = qingyunti_geodata(source, self.root)
+        self.assertEqual(config['rules'], [rule.replace('青云出口', '主备切换') for rule in pinned['rules']])
+        self.assertEqual([{key: value for key, value in node.items() if key != 'name'}
+                          for node in config['proxies'][1:]],
+                         [{key: value for key, value in item['proxies'][0].items() if key != 'name'}
+                          for item in (backup, second)])
+        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
+
+    def test_qingyunti_ip_or_static_host_backup_does_not_add_dns_exceptions(self):
+        source = self.qingyunti_source()
+        original = self.yaml.load((self.root / 'profiles/b.yaml').read_text(encoding='utf-8'))
+        self.request['policy'] = 'qingyunti'
+        for server, hosts in (('192.0.2.2', {}), ('2001:db8::2', {}),
+                              ('backup.example.invalid', {'backup.example.invalid': '192.0.2.2'})):
+            backup = {**original, 'proxies': [{**original['proxies'][0], 'server': server}], 'hosts': hosts}
+            self.write('profiles/b.yaml', backup)
+            response = self.client.post('/api/failover/export', json=self.request)
+            with self.subTest(server=server):
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(self.yaml.load(response.json()['yaml'])['dns'],
+                                 {key: value for key, value in source['dns'].items() if key != 'listen'})
+
+    def test_qingyunti_shared_primary_and_backup_domain_requires_compatible_dns(self):
+        source = self.qingyunti_source()
+        backup = self.yaml.load((self.root / 'profiles/b.yaml').read_text(encoding='utf-8'))
+        backup = {**backup, 'proxies': [{**backup['proxies'][0],
+                  'server': source['proxies'][0]['server'].upper() + '.'}]}
+        self.write('profiles/b.yaml', backup)
+        self.request['policy'] = 'qingyunti'
+        response = self.client.post('/api/failover/export', json=self.request)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('主备共用服务器域名', response.json()['detail'])
+        self.assertFalse((self.root / 'exports').exists())
+        self.write('profiles/b.yaml', {**backup, 'dns': source['dns']})
+        response = self.client.post('/api/failover/export', json=self.request)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn('proxy-server-nameserver-policy', self.yaml.load(response.json()['yaml'])['dns'])
+
+    def test_qingyunti_backups_cannot_silently_overwrite_conflicting_server_dns(self):
+        self.qingyunti_source()
+        backup = self.yaml.load((self.root / 'profiles/b.yaml').read_text(encoding='utf-8'))
+        first = {**backup, 'dns': {'proxy-server-nameserver': ['https://192.0.2.53/dns-query']}}
+        second = {**backup, 'dns': {'proxy-server-nameserver': ['https://192.0.2.54/dns-query']}}
+        self.write('profiles/b.yaml', first)
+        self.write('profiles/c.yaml', second)
+        self.write('profiles.yaml', {'items': [*self.items,
+                   {'uid': 'c', 'type': 'local', 'name': '订阅 C', 'file': 'c.yaml'}]})
+        self.request = {**self.request, 'policy': 'qingyunti',
+                        'backup2': {'profile_id': 'c', 'node_name': '日本 01'}}
+        response = self.client.post('/api/failover/export', json=self.request)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('备用节点共用服务器域名', response.json()['detail'])
+        self.assertFalse((self.root / 'exports').exists())
+
+    def test_qingyunti_unportable_backup_dns_fails_without_exposing_server_values(self):
+        self.qingyunti_source()
+        backup = self.yaml.load((self.root / 'profiles/b.yaml').read_text(encoding='utf-8'))
+        self.request['policy'] = 'qingyunti'
+        for dns in ('invalid', {'proxy-server-nameserver': 'invalid'},
+                    {'proxy-server-nameserver': [None]},
+                    {'nameserver-policy': {'+.example.invalid': ['system']}},
+                    {'proxy-server-nameserver': ['https://private-token.example.invalid/dns-query#OLD']}):
+            self.write('profiles/b.yaml', {**backup, 'dns': dns})
+            response = self.client.post('/api/failover/export', json=self.request)
+            with self.subTest(dns=dns):
+                self.assertEqual(response.status_code, 400)
+                self.assertNotIn('private-token', response.text)
+                self.assertFalse((self.root / 'exports').exists())
+
+    def test_qingyunti_preserves_already_frozen_rules_without_reading_databases(self):
+        source = qingyunti_geodata(self.qingyunti_source(), self.root)
+        self.write('profiles/a.yaml', source)
+        (self.root / 'GeoSite.dat').unlink()
+        self.request['policy'] = 'qingyunti'
+        response = self.client.post('/api/failover/export', json=self.request)
+        self.assertEqual(response.status_code, 200, response.text)
+        config = self.yaml.load(response.json()['yaml'])
+        self.assertEqual(config['rule-providers'], source['rule-providers'])
+        self.assertEqual(config['dns'], {
+            **{key: value for key, value in source['dns'].items() if key != 'listen'},
+            'proxy-server-nameserver-policy': {'example.invalid': ['system']}})
+
+    def test_missing_qingyunti_database_does_not_fall_back_or_affect_loyalsoldier(self):
+        self.qingyunti_source()
+        (self.root / 'GeoSite.dat').unlink()
+        self.request['policy'] = 'qingyunti'
+        response = self.client.post('/api/failover/export', json=self.request)
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse((self.root / 'exports').exists())
+        self.request['policy'] = 'loyalsoldier'
+        result = self.client.post('/api/failover/export', json=self.request)
+        self.assertEqual(result.status_code, 200)
+        self.assertNotIn('dns', self.yaml.load(result.json()['yaml']))
 
     def test_qingyunti_policy_rewrites_dns_outlets_and_keeps_referenced_rule_providers(self):
         source = self.qingyunti_source()

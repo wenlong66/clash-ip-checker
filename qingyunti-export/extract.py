@@ -13,8 +13,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from utils.clash_config import portable_config
-
-APEX_CORE = Path(r"D:\Program Files (x86)\青云梯-极速版\ApexCore.exe")
+from utils.qingyunti_geodata import APEX_CORE, qingyunti_geodata
 
 
 def parse_config(raw):
@@ -33,6 +32,35 @@ def parse_config(raw):
     if len({p["name"] for p in proxies}) != len(proxies):
         return None
     return config
+
+
+def config_candidates(raw):
+    result = []
+    checked = set()
+    decoder = json.JSONDecoder()
+    for match in re.finditer(rb'(?m)^proxies\s*:|"proxies"\s*:\s*\[', raw):
+        lower = max(0, match.start() - 2_000_000)
+        upper = min(len(raw), match.end() + 2_000_000)
+        start = raw.rfind(b'\0', lower, match.start()) + 1
+        end = raw.find(b'\0', match.end(), upper)
+        config = parse_config(raw[start:end]) if end >= 0 else None
+        if not config:
+            starts = [lower + item.start() for item in re.finditer(rb'\{', raw[lower:match.start()])][-512:]
+            for offset in reversed(starts):
+                if offset in checked:
+                    continue
+                checked.add(offset)
+                text = raw[offset:upper].decode('utf-8', errors='replace')
+                try:
+                    _, length = decoder.raw_decode(text)
+                except (ValueError, RecursionError):
+                    continue
+                config = parse_config(text[:length].encode('utf-8'))
+                if config:
+                    break
+        if config and config not in result:
+            result.append(config)
+    return result
 
 
 def active_server_hosts(pid, proxies):
@@ -111,14 +139,8 @@ def extract(pid):
             if not kernel.ReadProcessMemory(handle, info.base, buf, info.size, c.byref(count)):
                 continue
             raw = buf.raw[:count.value]
-            # shortcut: requires intact null-delimited config in one region; revisit after client layout changes.
-            for match in re.finditer(rb'(?m)^proxies\s*:|"proxies"\s*:\s*\[', raw):
-                start = raw.rfind(b"\0", max(0, match.start() - 2_000_000), match.start()) + 1
-                end = raw.find(b"\0", match.end(), min(len(raw), match.end() + 2_000_000))
-                if end < 0:
-                    continue
-                config = parse_config(raw[start:end])
-                if config and (found is None or len(config["proxies"]) > len(found["proxies"])):
+            for config in config_candidates(raw):
+                if found is None or len(config["proxies"]) > len(found["proxies"]):
                     found = config
     finally:
         kernel.CloseHandle(handle)
@@ -148,8 +170,9 @@ def main():
     parser.add_argument("--stdout", action="store_true", help="Write YAML to stdout without saving a file")
     args = parser.parse_args()
     try:
-        config = extract(args.pid if args.pid is not None else find_pid())
-    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        pid = args.pid if args.pid is not None else find_pid()
+        config = qingyunti_geodata(extract(pid), pid=pid)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         parser.exit(1, f"提取失败：{error}\n")
     target = Path(__file__).resolve().with_name("qingyunti-clash.yaml")
     text = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
