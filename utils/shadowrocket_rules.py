@@ -1,8 +1,13 @@
 """Export DNS and routing separately from Shadowrocket node subscriptions."""
 from ipaddress import ip_address, ip_network
+from itertools import product
 import re
 
 from utils.geosite import geosite_domains
+
+
+MAX_REGEX_DOMAINS = 1024
+MAX_DOMAIN_LENGTH = 253
 
 
 def config_value(value, forbidden=',\r\n'):
@@ -10,6 +15,76 @@ def config_value(value, forbidden=',\r\n'):
             or any(char in value for char in forbidden)):
         raise ValueError('DNS 或分流配置包含无法安全转换的参数，请重新提取')
     return value
+
+
+def finite_domain_rules(expression):
+    kind = 'DOMAIN-SUFFIX' if expression.startswith(r'(^|\.)') else 'DOMAIN'
+    prefix = len(r'(^|\.)') if kind == 'DOMAIN-SUFFIX' else 1
+    if (not expression.endswith('$') or re.search('[A-Z]', expression)
+            or kind == 'DOMAIN' and not expression.startswith('^')):
+        return None
+    remaining = expression[prefix:-1]
+    domains = ['']
+    while remaining:
+        match = re.match(r'\\[.d-]|\[[a-zA-Z0-9-]+\]|\((?:\?:)?[a-zA-Z0-9\\.|-]+\)|[a-zA-Z0-9_-]', remaining)
+        if not match:
+            return None
+        atom = match[0]
+        remaining = remaining[match.end():]
+        if atom.startswith('['):
+            try:
+                values = [char for char in 'abcdefghijklmnopqrstuvwxyz0123456789-._'
+                          if re.fullmatch(atom, char)]
+            except re.error:
+                return None
+        elif atom.startswith('('):
+            values = atom[1:-1].removeprefix('?:').split('|')
+            if any(not re.fullmatch(r'(?:[a-zA-Z0-9_-]|\\\.)+', value) for value in values):
+                return None
+            values = [value.replace(r'\.', '.') for value in values]
+        else:
+            values = list('0123456789') if atom == r'\d' else [atom.removeprefix('\\')]
+        repeat = re.match(r'\{(\d+)(?:,(\d+))?\}|\?', remaining)
+        minimum, maximum = 1, 1
+        if repeat:
+            minimum, maximum = ((0, 1) if repeat[0] == '?' else
+                                (int(repeat[1]), int(repeat[2] or repeat[1])))
+            remaining = remaining[repeat.end():]
+        if (not values or maximum > MAX_DOMAIN_LENGTH or minimum > maximum
+                or max(map(len, domains)) + max(map(len, values)) * maximum > MAX_DOMAIN_LENGTH
+                or len(domains) * sum(len(values) ** count for count in range(minimum, maximum + 1)) > MAX_REGEX_DOMAINS):
+            return None
+        variants = [''.join(items) for count in range(minimum, maximum + 1)
+                    for items in product(values, repeat=count)]
+        domains = [domain + value for domain in domains for value in variants]
+    if any(len(domain) > MAX_DOMAIN_LENGTH or not re.fullmatch(r'[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*', domain)
+           for domain in domains):
+        return None
+    return [(kind, domain) for domain in dict.fromkeys(domains)]
+
+
+def url_domain_regex(expression):
+    def comma_repeat(match):
+        atom, minimum, maximum = match.groups()
+        minimum = int(minimum)
+        maximum = int(maximum) if maximum else None
+        if minimum > MAX_DOMAIN_LENGTH or maximum is not None and not minimum <= maximum <= MAX_DOMAIN_LENGTH:
+            raise ValueError('域名正则重复次数超出可转换范围，不能完整导出')
+        repeated = f'(?:{atom})'
+        return repeated + '{' + str(minimum) + '}' + (repeated + '*' if maximum is None
+                                                     else (repeated + '?') * (maximum - minimum))
+
+    expression = re.sub(r'(\\.|\[(?:\\.|[^\\\]])+\]|[^\\\[\](){}*+?])\{(\d+),(\d*)\}',
+                        comma_repeat, expression)
+    if re.search(r'\{\d+,\d*\}', expression):
+        raise ValueError('此域名正则包含不能安全转换的小火箭量词，不能完整导出')
+    anchored = expression.startswith('^')
+    expression = expression.removeprefix('^').removesuffix('$').replace(',', r'\x2c')
+    if expression.startswith(r'(^|\.)'):
+        expression = r'(?:[^/]+\.)?' + expression[len(r'(^|\.)'):]
+    elif not anchored:
+        expression = r'[^/]*' + expression
+    return r'^https?://' + expression + r'(?::[0-9]+)?(?:[/?#]|$)'
 
 
 def shadowrocket_rules_config(config, geosite_path):
@@ -104,15 +179,12 @@ def shadowrocket_rules_config(config, geosite_path):
             entries = domains[prefix.split(',', 1)[1]] if kind == 'GEOSITE' else [(1, prefix.split(',', 1)[1])]
             for domain_type, value in entries:
                 if domain_type == 1:
-                    if re.search(r'\{\d+,\d*\}', value):
-                        raise ValueError('此域名正则包含不能安全转换的小火箭量词，不能完整导出')
-                    # Shadowrocket has URL-REGEX, not an equivalent DOMAIN-REGEX rule.
-                    expression = value.removeprefix('^').removesuffix('$').replace(',', r'\x2c')
-                    if expression.startswith(r'(^|\.)'):
-                        expression = r'(?:[^/]+\.)?' + expression[len(r'(^|\.)'):]
-                    elif not value.startswith('^'):
-                        expression = r'[^/]*' + expression
-                    value = r'^https?://' + expression + r'(?::[0-9]+)?(?:[/?#]|$)'
+                    finite = finite_domain_rules(value)
+                    if finite is not None:
+                        rules.extend(f'{name},{domain},{target}{suffix}' for name, domain in finite)
+                        continue
+                    # shortcut: non-finite regexes remain HTTP/HTTPS-only until a native domain-regex rule is supported.
+                    value = url_domain_regex(value)
                     name = 'URL-REGEX'
                     regex_count += 1
                 else:
@@ -144,7 +216,7 @@ def shadowrocket_rules_config(config, geosite_path):
               '# 本文件会更换当前启用的 DNS 与分流规则，请先备份原配置；日常连接不依赖原客户端或网页服务。',
               '# 跨内核差异：DNS 引导、Fake-IP 地址段、嗅探及规则优先级由小火箭处理，GeoIP 数据库版本可能不同。']
     if regex_count:
-        header.append(f'# 注意：{regex_count} 条 GeoSite 域名正则转换为 HTTP/HTTPS URL 正则；受小火箭 URL 识别能力限制，其他协议不能等价匹配。')
+        header.append(f'# 注意：仍有 {regex_count} 条域名正则仅转换为 HTTP/HTTPS URL 正则；受小火箭 URL 识别能力限制，其他协议不能等价匹配。')
     if any(isinstance(value, list) and len(value) > 1 for value in mappings.values()):
         header.append('# 注意：多个 Host IP 仅写入首个地址；源规则或 IP 变化后需重新生成并导入。')
     sections = [('General', general), ('Rule', rules), ('Host', hosts)]

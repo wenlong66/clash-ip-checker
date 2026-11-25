@@ -1,5 +1,6 @@
 from copy import deepcopy
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -51,7 +52,9 @@ class ShadowrocketRulesTests(unittest.TestCase):
         self.assertIn('FINAL,PROXY', text)
         self.assertIn('service.example.com = 192.0.2.1', text)
         self.assertIn('当前选中', text)
-        self.assertIn('HTTP/HTTPS', text)
+        self.assertIn('DOMAIN,a1.example.cn,DIRECT', text)
+        self.assertIn('DOMAIN,a5.example.cn,DIRECT', text)
+        self.assertNotIn('URL-REGEX,', text)
         self.assertNotIn('GEOSITE,', text)
         self.assertNotIn('DOMAIN-REGEX,', text)
         self.assertLess(text.index('DOMAIN-SUFFIX,cn,DIRECT'), text.index('DOMAIN-SUFFIX,example.cn,DIRECT'))
@@ -64,7 +67,7 @@ class ShadowrocketRulesTests(unittest.TestCase):
         self.database.unlink()
         text = shadowrocket_rules_config(pinned, self.database)
         self.assertIn('DOMAIN-SUFFIX,example.cn,DIRECT', text)
-        self.assertIn('URL-REGEX,', text)
+        self.assertIn('DOMAIN,a1.example.cn,DIRECT', text)
         self.assertIn('FINAL,PROXY', text)
         self.assertNotIn('RULE-SET,', text)
         self.assertNotIn('never-export-this', text)
@@ -76,10 +79,66 @@ class ShadowrocketRulesTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 shadowrocket_rules_config(source, None)
 
-    def test_comma_quantifier_is_rejected_instead_of_silently_rewritten(self):
-        source = {**self.config, 'rules': ['RULE-SET,local,DIRECT'], 'rule-providers': {
-            'local': {'type': 'inline', 'behavior': 'classical',
-                      'payload': [r'DOMAIN-REGEX,^a{1,3}\.example\.invalid$']}}}
+    def test_finite_regex_matches_exact_domains_and_suffixes_for_all_protocols(self):
+        for expression in (r'^a{1,3}\.example\.invalid$',
+                           r'(^|\.)node[1-3]{1,2}\.(com|net)$',
+                           r'^edge\d?\.example\.invalid$'):
+            source = {**self.config, 'rules': ['DOMAIN,before.invalid,REJECT',
+                'RULE-SET,local,DIRECT', 'MATCH,青云出口'], 'rule-providers': {
+                'local': {'type': 'inline', 'behavior': 'classical',
+                          'payload': ['DOMAIN-REGEX,' + expression]}}}
+            original = deepcopy(source)
+            text = shadowrocket_rules_config(source, None)
+            rules = text.split('[Rule]\n', 1)[1].split('\n\n', 1)[0].splitlines()
+            self.assertEqual(rules[0], 'DOMAIN,before.invalid,REJECT')
+            self.assertEqual(rules[-1], 'FINAL,PROXY')
+            converted = [line.split(',') for line in rules[1:-1]]
+            self.assertTrue(converted)
+            self.assertTrue(all(kind in ('DOMAIN', 'DOMAIN-SUFFIX') for kind, _, _ in converted))
+            for host in ('a.example.invalid', 'aa.example.invalid', 'aaa.example.invalid',
+                         'aaaa.example.invalid', 'sub.a.example.invalid', 'a.example.invalid.evil',
+                         'node1.com', 'node12.net', 'www.node33.com', 'node4.com',
+                         'node123.com', 'mynode1.com', 'node1.com.evil', 'edge.example.invalid',
+                         'edge0.example.invalid', 'edge12.example.invalid'):
+                expected = bool(re.search(expression, host))
+                actual = any(host == value or kind == 'DOMAIN-SUFFIX' and host.endswith('.' + value)
+                             for kind, value, _ in converted)
+                with self.subTest(expression=expression, host=host):
+                    self.assertEqual(actual, expected)
+            self.assertNotIn('URL-REGEX,', text)
+            self.assertEqual(source, original)
+
+    def test_unbounded_regex_retains_http_warning_and_comma_quantifier_semantics(self):
+        for expression in (r'^a+\d{1,3}\.example\.invalid$',
+                           r'^a+\d{2,}\.example\.invalid$',
+                           r'^a+[0-9]{1,3}\.example\.invalid$',
+                           r'^a+b{1,3}\.example\.invalid$'):
+            source = {**self.config, 'rules': ['DOMAIN-REGEX,' + expression + ',DIRECT']}
+            text = shadowrocket_rules_config(source, None)
+            rule = next(line for line in text.splitlines() if line.startswith('URL-REGEX,'))
+            _, converted, target = rule.split(',')
+            self.assertEqual(target, 'DIRECT')
+            self.assertIn('HTTP/HTTPS', text)
+            for host in ('a1.example.invalid', 'aaa12.example.invalid', 'a123.example.invalid',
+                         'a1234.example.invalid', 'a.example.invalid', 'a12.example.invalid.evil',
+                         'aab.example.invalid', 'aabbb.example.invalid', 'aabbbb.example.invalid'):
+                with self.subTest(expression=expression, host=host):
+                    self.assertEqual(bool(re.search(converted, 'https://' + host + '/path')),
+                                     bool(re.search(expression, host)))
+
+    def test_large_finite_regex_uses_warned_fallback_instead_of_exploding_config(self):
+        source = {**self.config, 'rules': [r'DOMAIN-REGEX,^n[0-9]{1,4}\.example\.invalid$,DIRECT']}
+        text = shadowrocket_rules_config(source, None)
+        rules = text.split('[Rule]\n', 1)[1].split('\n\n', 1)[0].splitlines()
+        self.assertEqual(len(rules), 1)
+        self.assertTrue(rules[0].startswith('URL-REGEX,'))
+        self.assertIn('HTTP/HTTPS', text)
+        _, expression, _ = rules[0].split(',')
+        self.assertTrue(re.search(expression, 'https://n1234.example.invalid/'))
+        self.assertFalse(re.search(expression, 'https://n12345.example.invalid/'))
+
+    def test_excessive_regex_expansion_is_rejected_without_allocating_the_output(self):
+        source = {**self.config, 'rules': [r'DOMAIN-REGEX,^a{1,99999999}\.invalid$,DIRECT']}
         with self.assertRaises(ValueError):
             shadowrocket_rules_config(source, None)
 

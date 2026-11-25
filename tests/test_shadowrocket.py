@@ -40,6 +40,19 @@ class ShadowrocketTests(unittest.TestCase):
             self.assertNotIn('[General]', text)
             self.assertNotIn('MATCH', text)
 
+    def test_ip_version_preference_does_not_change_the_captured_server_ip_or_website_dns(self):
+        for address in ('192.0.2.1', '2001:db8::1'):
+            source = {**self.config, 'proxies': [{**self.node, 'ip-version': 'ipv6-prefer'}],
+                      'hosts': {'node.example.com': [address]}}
+            original = deepcopy(source)
+            text = shadowrocket_subscription(source)
+            uri = urlsplit(text.strip())
+            self.assertEqual(uri.hostname, address)
+            self.assertEqual(parse_qs(uri.query)['sni'], ['tls.example.com'])
+            self.assertNotIn('prefer-ipv6', text)
+            self.assertNotIn('[General]', text)
+            self.assertEqual(source, original)
+
     def test_rejects_unsupported_and_incomplete_nodes_without_exposing_credentials(self):
         for changed in ({'type': 'trojan'}, {'tls': False}, {'network': 'ws'}, {'port': 0}, {'port': True},
                         {'uuid': 'secret-uuid'}, {'flow': 'unknown'}, {'name': 'bad\nname'},
